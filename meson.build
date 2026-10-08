@@ -182,6 +182,19 @@ endif
 if 'egis0575' in drivers and gusb_dep.version().version_compare('< 0.3.3')
     error('egis0575 requires GUsb >= 0.3.3 for endpoint descriptor validation')
 endif
+ridge_deps = []
+if get_option('egis0575_ridge')
+    if drivers != ['egis0575']
+        error('Experimental EH575 ridge matching requires -Ddrivers=egis0575 alone')
+    endif
+    opencv = dependency('opencv4', version: '>= 4.5', method: 'pkg-config')
+    ridge_deps += opencv.partial_dependency(compile_args: true, includes: true)
+    foreach module : ['core', 'imgproc', 'features2d', 'calib3d', 'video']
+        ridge_deps += cpp.find_library('opencv_' + module,
+            dirs: [opencv.get_variable(pkgconfig: 'libdir')])
+    endforeach
+endif
+libfprint_conf.set10('EH575_EXPERIMENTAL_RIDGE', get_option('egis0575_ridge'))
 
 if not have_spi
     foreach driver: drivers

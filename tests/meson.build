@@ -8,6 +8,7 @@ if 'egis0575' in drivers
     suite: ['drivers', 'egis0575'])
   eh575_driver_test = executable('test-egis0575-driver',
     'test-egis0575-driver.c',
+    c_args: ['-DEH575_TEST_IMAGE'],
     include_directories: include_directories('../libfprint/drivers'),
     dependencies: libfprint_private_dep,
   )
@@ -28,6 +29,28 @@ if 'egis0575' in drivers
     env: ['G_MESSAGES_DEBUG=', 'G_DEBUG=fatal-warnings'],
     suite: ['drivers', 'egis0575'],
   )
+endif
+
+if get_option('egis0575_ridge')
+  ridge_device_test = executable('test-egis0575-ridge-device',
+    ['test-egis0575-ridge-device.c', '../libfprint/drivers/egis0575-ridge.cpp'],
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: libfprint_private_dep,
+    install: false)
+  test('egis0575-ridge-device', ridge_device_test,
+    env: ['G_DEBUG=fatal-warnings', 'G_MESSAGES_DEBUG='],
+    timeout: 120,
+    suite: ['drivers', 'egis0575'])
+  ridge_check = executable('eh575-ridge-check',
+    ['eh575-ridge-check.c', '../libfprint/drivers/egis0575-ridge.cpp'],
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: [gio_dep, mathlib_dep] + ridge_deps,
+    install: false)
+  test('egis0575-ridge', python3,
+    args: [files('test-egis0575-ridge.py'), ridge_check],
+    env: ['G_MESSAGES_DEBUG=', 'G_DEBUG=fatal-warnings'],
+    timeout: 120,
+    suite: ['drivers', 'egis0575'])
 endif
 
 envs = environment()

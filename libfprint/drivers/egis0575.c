@@ -1,17 +1,31 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Copyright (C) 2026 fingerprint contributors
- * Experimental image driver for USB 1c7a:0575, revision 1072.
- * No vendor matcher, firmware upload, Python bridge or custom match threshold.
+ * Experimental stationary driver for USB 1c7a:0575, revision 1072.
+ * Default image mode retains NBIS; opt-in ridge mode owns native matching.
+ * No vendor matcher, firmware upload or Python bridge.
  */
 #define FP_COMPONENT "egis0575"
 #include "drivers_api.h"
 #include "egis0575.h"
+#include "config.h"
+#ifdef EH575_TEST_IMAGE
+#undef EH575_EXPERIMENTAL_RIDGE
+#define EH575_EXPERIMENTAL_RIDGE 0
+#endif
+#if EH575_EXPERIMENTAL_RIDGE
+#include "egis0575-ridge.h"
+typedef FpDevice Eh575Device;
+#define EH575_DEVICE(dev) FP_DEVICE (dev)
+#else
+typedef FpImageDevice Eh575Device;
+#define EH575_DEVICE(dev) FP_IMAGE_DEVICE (dev)
+#endif
 
 typedef enum { COMMAND_INIT, COMMAND_DC_READ, COMMAND_DC_WRITE, COMMAND_REARM } CommandMode;
 
 struct _FpDeviceEgis0575
 {
-  FpImageDevice       parent;
+  Eh575Device         parent;
   GCancellable       *io_cancel;
   gulong              cancel_handler;
   guint               timer;
@@ -20,21 +34,43 @@ struct _FpDeviceEgis0575
   FpiImageDeviceState image_state;
   size_t              command_index;
   Eh575Command        command;
-  uint8_t             frame[EH575_FRAME_SIZE], samples[3][EH575_FRAME_SIZE], background[EH575_FRAME_SIZE];
+  uint8_t             frame[EH575_FRAME_SIZE], samples[5][EH575_FRAME_SIZE], background[EH575_FRAME_SIZE];
   size_t              frame_used;
   gint64              frame_deadline, operation_deadline, settle_until;
   unsigned int        sample_count, clear_count, bad_count;
   int                 dc, best_dc, low, high;
   double              best_distance;
   gboolean            searching, final_measurement;
+#if EH575_EXPERIMENTAL_RIDGE
+  FpiDeviceAction     action;
+  GPtrArray          *enrollment;
+  FpPrint            *enroll_print;
+  FpImage            *capture_image;
+  GError             *action_error;
+  Eh575RidgeResult    match;
+  guint               stages;
+  gboolean            matching;
+#endif
 };
+#if EH575_EXPERIMENTAL_RIDGE
+G_DECLARE_FINAL_TYPE (FpDeviceEgis0575, fpi_device_egis0575, FPI, DEVICE_EGIS0575, FpDevice);
+G_DEFINE_TYPE (FpDeviceEgis0575, fpi_device_egis0575, FP_TYPE_DEVICE);
+#else
 G_DECLARE_FINAL_TYPE (FpDeviceEgis0575, fpi_device_egis0575, FPI, DEVICE_EGIS0575, FpImageDevice);
 G_DEFINE_TYPE (FpDeviceEgis0575, fpi_device_egis0575, FP_TYPE_IMAGE_DEVICE);
+#endif
 
 static void send_command (FpDeviceEgis0575 *self);
 static void start_frame (FpDeviceEgis0575 *self);
 static void read_frame (FpDeviceEgis0575 *self);
 static void process_frame (FpDeviceEgis0575 *self);
+#if EH575_EXPERIMENTAL_RIDGE
+static void finish (FpDeviceEgis0575 *self,
+                    GError           *error);
+static void dev_activate (Eh575Device *dev);
+static void dev_deactivate (Eh575Device *dev);
+#include "egis0575-ridge-adapter.h"
+#endif
 
 static void
 finish (FpDeviceEgis0575 *self, GError *error)
@@ -56,15 +92,15 @@ finish (FpDeviceEgis0575 *self, GError *error)
   if (self->stopping)
     {
       g_clear_error (&error);
-      fpi_image_device_deactivate_complete (FP_IMAGE_DEVICE (self), NULL);
+      fpi_image_device_deactivate_complete (EH575_DEVICE (self), NULL);
     }
   else if (self->activating)
     {
-      fpi_image_device_activate_complete (FP_IMAGE_DEVICE (self), error);
+      fpi_image_device_activate_complete (EH575_DEVICE (self), error);
     }
   else
     {
-      fpi_image_device_session_error (FP_IMAGE_DEVICE (self), error);
+      fpi_image_device_session_error (EH575_DEVICE (self), error);
     }
 }
 
@@ -347,7 +383,7 @@ calibrate_frame (FpDeviceEgis0575 *self)
       self->sample_count = 0;
       self->activating = FALSE;
       self->operation_deadline = g_get_monotonic_time () + 30000000;
-      fpi_image_device_activate_complete (FP_IMAGE_DEVICE (self), NULL);
+      fpi_image_device_activate_complete (EH575_DEVICE (self), NULL);
       if (!self->stopping)
         self->timer = g_timeout_add (80, continue_frame, self);
       return;
@@ -374,7 +410,7 @@ calibrate_frame (FpDeviceEgis0575 *self)
 static void
 process_frame (FpDeviceEgis0575 *self)
 {
-  FpImageDevice *image_dev = FP_IMAGE_DEVICE (self);
+  Eh575Device *image_dev = EH575_DEVICE (self);
   FpiImageDeviceState state;
   gboolean present;
 
@@ -417,13 +453,22 @@ process_frame (FpDeviceEgis0575 *self)
                   /* Wait for a steady burst, not a swipe or an immediate
                    * motion retry. The existing scan deadline stays bounded.
                    */
-                  fp_dbg ("Press contact settling: correlation=%.4f; restarting three-frame burst", correlation);
+                  fp_dbg ("Press contact settling: correlation=%.4f; restarting steady burst", correlation);
                   self->sample_count = 0;
                 }
             }
           memcpy (self->samples[self->sample_count++], self->frame, EH575_FRAME_SIZE);
-          if (self->sample_count == 3)
+          if (self->sample_count ==
+#if EH575_EXPERIMENTAL_RIDGE
+              (self->action == FPI_DEVICE_ACTION_VERIFY ? 5 : 3)
+#else
+              3
+#endif
+             )
             {
+#if EH575_EXPERIMENTAL_RIDGE
+              ridge_burst (self);
+#else
               FpImage *image = fp_image_new (EH575_WIDTH * 2, EH575_HEIGHT * 2);
               eh575_median (self->frame, self->samples);
               eh575_normalize (self->frame, self->frame, self->background);
@@ -433,6 +478,7 @@ process_frame (FpDeviceEgis0575 *self)
                       EH575_WIDTH, EH575_HEIGHT);
               fpi_image_device_image_captured (image_dev, image);
               self->sample_count = 0;
+#endif
             }
         }
     }
@@ -448,6 +494,10 @@ process_frame (FpDeviceEgis0575 *self)
     }
   if (!self->running)
     return;
+#if EH575_EXPERIMENTAL_RIDGE
+  if (self->matching)
+    return;
+#endif
   if (!self->stopping)
     self->timer = g_timeout_add (80, continue_frame, self);
   else if (!self->pending)
@@ -455,7 +505,7 @@ process_frame (FpDeviceEgis0575 *self)
 }
 
 static void
-dev_open (FpImageDevice *dev)
+dev_open (Eh575Device *dev)
 {
   FpDeviceEgis0575 *self = FPI_DEVICE_EGIS0575 (dev);
   GUsbDevice *usb = fpi_device_get_usb_device (FP_DEVICE (dev));
@@ -508,7 +558,7 @@ dev_open (FpImageDevice *dev)
 }
 
 static void
-dev_close (FpImageDevice *dev)
+dev_close (Eh575Device *dev)
 {
   g_autoptr(GError) error = NULL;
   g_usb_device_release_interface (fpi_device_get_usb_device (FP_DEVICE (dev)), 0, 0, &error);
@@ -516,7 +566,7 @@ dev_close (FpImageDevice *dev)
 }
 
 static void
-dev_activate (FpImageDevice *dev)
+dev_activate (Eh575Device *dev)
 {
   FpDeviceEgis0575 *self = FPI_DEVICE_EGIS0575 (dev);
   GCancellable *parent = fpi_device_get_cancellable (FP_DEVICE (dev));
@@ -543,14 +593,14 @@ dev_activate (FpImageDevice *dev)
   send_command (self);
 }
 
-static void
-dev_change_state (FpImageDevice *dev, FpiImageDeviceState state)
+static void G_GNUC_UNUSED
+dev_change_state (Eh575Device *dev, FpiImageDeviceState state)
 {
   FPI_DEVICE_EGIS0575 (dev)->image_state = state;
 }
 
 static void
-dev_deactivate (FpImageDevice *dev)
+dev_deactivate (Eh575Device *dev)
 {
   FpDeviceEgis0575 *self = FPI_DEVICE_EGIS0575 (dev);
 
@@ -581,13 +631,27 @@ static void
 fpi_device_egis0575_class_init (FpDeviceEgis0575Class *klass)
 {
   FpDeviceClass *device_class = FP_DEVICE_CLASS (klass);
+
+#if !EH575_EXPERIMENTAL_RIDGE
   FpImageDeviceClass *image_class = FP_IMAGE_DEVICE_CLASS (klass);
+#endif
 
   device_class->id = "egis0575";
   device_class->full_name = "EgisTec EH575 (experimental)";
   device_class->type = FP_DEVICE_TYPE_USB;
   device_class->id_table = id_table;
   device_class->scan_type = FP_SCAN_TYPE_PRESS;
+#if EH575_EXPERIMENTAL_RIDGE
+  device_class->full_name = "EgisTec EH575 (experimental stationary ridge)";
+  device_class->nr_enroll_stages = EH575_RIDGE_STAGES;
+  device_class->open = dev_open;
+  device_class->close = dev_close;
+  device_class->enroll = ridge_start;
+  device_class->verify = ridge_start;
+  device_class->capture = ridge_start;
+  device_class->cancel = ridge_cancel;
+  fpi_device_class_auto_initialize_features (device_class);
+#else
   device_class->nr_enroll_stages = 10;
   image_class->img_open = dev_open;
   image_class->img_close = dev_close;
@@ -597,4 +661,5 @@ fpi_device_egis0575_class_init (FpDeviceEgis0575Class *klass)
   image_class->img_width = EH575_WIDTH * 2;
   image_class->img_height = EH575_HEIGHT * 2;
   /* Keep libfprint's default Bozorth3 threshold (40). */
+#endif
 }

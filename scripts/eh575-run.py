@@ -31,7 +31,7 @@ def main():
     parser.add_argument("command", choices=("open", "idle", "capture", "capture-series", "enroll", "verify"))
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--deps", type=Path, help="Optional extracted dependency prefix, not a system installation")
-    parser.add_argument("--state", type=Path, default=Path(__file__).resolve().parents[1] / ".state/eh575")
+    parser.add_argument("--state", type=Path, help="Private test directory; defaults to a separate directory for each matcher")
     args = parser.parse_args()
     if os.geteuid() == 0:
         parser.error("Do not run this prototype as root")
@@ -42,6 +42,9 @@ def main():
         parser.error("Use an isolated build with -Ddrivers=egis0575")
     if next((item["value"] for item in options if item["name"] == "egis0575_swipe"), False):
         parser.error("Swipe acquisition has been retired; use a freshly compiled stationary press build")
+    ridge = next((item["value"] for item in options if item["name"] == "egis0575_ridge"), False)
+    if args.state is None:
+        args.state = Path(__file__).resolve().parents[1] / (".state/eh575-ridge" if ridge else ".state/eh575")
     binary = build / "tests/eh575-smoke"
     if not binary.is_file():
         parser.error("Build the EH575 smoke-test executable first")
@@ -58,9 +61,13 @@ def main():
             (template.stat().st_uid != os.getuid() or template.stat().st_mode & 0o077)):
         parser.error("Native template has unsafe ownership or permissions")
     env = os.environ.copy()
+    if env.get("G_MESSAGES_DEBUG") != "libfprint-egis0575":
+        env.pop("G_MESSAGES_DEBUG", None)
     libraries = [str(build / "libfprint")]
     if args.deps:
-        libraries.append(str(args.deps.resolve(strict=True) / "usr/lib/x86_64-linux-gnu"))
+        deps = args.deps.resolve(strict=True)
+        libraries.append(str(deps / "usr/lib/x86_64-linux-gnu"))
+        libraries.append(str(deps / "usr/lib/x86_64-linux-gnu/openblas-pthread"))
     env["LD_LIBRARY_PATH"] = ":".join(libraries)
     env["FP_DRIVERS_ALLOWLIST"] = "egis0575"
     os.umask(0o077)

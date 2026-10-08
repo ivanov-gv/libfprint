@@ -62,6 +62,31 @@ reporting excessive speed. No translations or other geometric fitting are used.
 Persistent poor quality generates a center-finger retry.
 These are acquisition gates, not matching thresholds or proof of identity.
 
+## Experimental stationary ridge mode
+
+An isolated `-Degis0575_ridge=true` build uses the same transport/calibration
+and a native `FpDevice` enrollment/verification adapter. Enrollment uses three
+stable frames per touch and 15 separate touches; verification uses five stable
+frames in one touch. No sliding or stitching is required. The default image
+driver remains an `FpImageDevice` with unchanged NBIS settings.
+
+Host-side native OpenCV registration compares measured ridge detail rather than
+extracting minutiae. Rotation is bounded to 35 degrees, affine singular values
+to 0.80..1.20, anisotropy to 1.25 and determinant must be positive. Acceptance
+requires at least three of five frames under one fitted transform to pass NCC
+>=0.85, both edge NCC >=0.70, three-region NCC >=0.70 and distinct-registration
+margin >=0.04. Overlap must be >=55%, or >=40% with stronger NCC/edge/regional
+values >=0.90/0.75/0.80. These are experimental policy values, not validated
+security guarantees; repeated ridge patterns must not establish identity.
+
+Templates use RAW libfprint data `(sa(ayay))`: a schema string `eh575-ridge-v1`
+and raw-median/background byte-array pairs. Require 6..24 touches, exactly 5356
+bytes in each array, normal-form encoding and <=300000 bytes of driver data.
+Unknown schema/type and malformed data are rejected before sensor acquisition.
+The worker receives a bounded snapshot, checks cancellation between registration
+steps and finishes before the operation can complete or restart. Library failures
+cannot report a match. This is WIP; real native matching and GNOME remain unvalidated.
+
 The candidate median frame has its own measured background subtracted and
 global mean removed, with a fixed gain of two around level 128. Bounded bilinear
 2× interpolation yields a 206×104 partial image for native minutiae extraction.

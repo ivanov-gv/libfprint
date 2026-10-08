@@ -208,6 +208,9 @@ drivers_sources += configure_file(input: 'empty_file',
         'echo',
         '\n'.join(drivers_type_list + [] + drivers_type_func)
     ])
+if get_option('egis0575_ridge')
+    drivers_sources += files('drivers/egis0575-ridge.cpp')
+endif
 
 deps = [
     enums_dep,
@@ -217,7 +220,7 @@ deps = [
     gobject_dep,
     gusb_dep,
     mathlib_dep,
-] + optional_deps
+] + optional_deps + ridge_deps
 
 # These are empty and only exist so that the include directories are created
 # in the build tree. This silences a build time warning.

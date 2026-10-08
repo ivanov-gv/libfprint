@@ -1,3 +1,7 @@
+option('egis0575_ridge',
+       description: 'Experimental native stationary EH575 ridge matching (isolated development build only)',
+       type: 'boolean',
+       value: false)
 option('drivers',
        description: 'Drivers to integrate, "default" selects the default set, "all" selects all drivers',
        type: 'string',
