@@ -24,12 +24,7 @@ finger_status (FpDevice *dev, GParamSpec *spec, gpointer data)
   gboolean ready = (status & FP_FINGER_STATUS_NEEDED) && !(status & FP_FINGER_STATUS_PRESENT);
 
   if (ready && !*prompted)
-    {
-      if (fp_device_get_scan_type (dev) == FP_SCAN_TYPE_SWIPE)
-        g_print ("Reader calibrated. Place your pad flat, slide SLOWLY along the sensor's narrow dimension for 3-5 seconds, then lift fully to finish. Use one straight direction.\n");
-      else
-        g_print ("Reader calibrated. Place your finger flat and hold still; lift fully after capture.\n");
-    }
+    g_print ("Reader calibrated. Place your finger flat and hold still. Do not slide; lift fully after capture.\n");
   *prompted = ready;
 }
 
@@ -93,12 +88,6 @@ main (int argc, char **argv)
   g_print ("Opened %s using %s.\n", fp_device_get_name (dev), fp_device_get_driver (dev));
   signal_id = g_unix_signal_add (SIGINT, cancel_scan, cancel);
   g_signal_connect (dev, "notify::finger-status", G_CALLBACK (finger_status), &prompted);
-  if (fp_device_get_scan_type (dev) == FP_SCAN_TYPE_SWIPE &&
-      (!strcmp (command, "enroll") || !strcmp (command, "verify")))
-    {
-      g_printerr ("Experimental swipe is capture-only; enrollment and verification are disabled in this helper.\n");
-      goto cleanup;
-    }
   if (!strcmp (command, "open"))
     {
       ok = TRUE;
@@ -145,7 +134,7 @@ main (int argc, char **argv)
           guchar *bytes = NULL;
           gsize length = 0;
           fp_print_set_finger (template, FP_FINGER_RIGHT_INDEX);
-          g_print ("Keep empty until calibrated. Enroll your right index finger with small overlapping shifts.\n");
+          g_print ("Keep empty until calibrated. Enroll your right index finger with stationary touches. Vary placement slightly only after lifting, never slide during a touch.\n");
           print = fp_device_enroll_sync (dev, template, cancel, enroll_progress, NULL, &error);
           if (print && fp_print_serialize (print, &bytes, &length, &error))
             ok = g_file_set_contents ("native-print.bin", (const char *) bytes, length, &error);
@@ -175,7 +164,6 @@ main (int argc, char **argv)
     }
   if (timer_id)
     g_source_remove (timer_id);
-cleanup:
   g_source_remove (signal_id);
   if (error)
     {

@@ -34,7 +34,7 @@ static void test_retry (FpImageDevice *dev,
 #include "egis0575.c"
 
 typedef enum { GOOD, BAD_ACK, TRUNCATED, OVERFLOW, CANCEL_CALIBRATION, CANCEL_COMPARISON, EARLY_FINGER,
-               SWIPE_STATIONARY, SWIPE_AMBIGUOUS, SWIPE_FAST, SWIPE_CANCEL } Scenario;
+               SETTLING_PRESS } Scenario;
 static Scenario scenario;
 static GCancellable *parent_cancel;
 static FpiUsbTransfer *queued;
@@ -114,16 +114,8 @@ test_finger (FpImageDevice *dev, gboolean present)
 static void
 test_image (FpImageDevice *dev, FpImage *image)
 {
-#if EH575_EXPERIMENTAL_SWIPE
-  g_assert_cmpuint (image->width, >=, EH575_SWIPE_MIN_WIDTH * 2);
-  g_assert_cmpuint (image->width, <=, 206);
-  g_assert_cmpuint (image->height, >=, EH575_SWIPE_MIN_HEIGHT * 2);
-  g_assert_cmpuint (image->height, <=, EH575_SWIPE_MAX_HEIGHT * 2);
-  g_assert_cmpuint (image->flags, ==, FPI_IMAGE_PARTIAL);
-#else
   g_assert_cmpuint (image->width, ==, 206);
   g_assert_cmpuint (image->height, ==, 104);
-#endif
   captured++;
   g_object_unref (image);
   if (scenario == CANCEL_COMPARISON)
@@ -140,12 +132,6 @@ test_image (FpImageDevice *dev, FpImage *image)
 static void
 test_retry (FpImageDevice *dev, FpDeviceRetry reason)
 {
-#if EH575_EXPERIMENTAL_SWIPE
-  if (scenario == SWIPE_STATIONARY)
-    g_assert_cmpint (reason, ==, FP_DEVICE_RETRY_TOO_SHORT);
-  else if (scenario == SWIPE_AMBIGUOUS || scenario == SWIPE_FAST)
-    g_assert_cmpint (reason, ==, FP_DEVICE_RETRY_GENERAL);
-#endif
   retries++;
   dev_change_state (dev, FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF);
 }
@@ -197,35 +183,19 @@ dispatch (FpDeviceEgis0575 *self)
         transfer->actual_length = 0;
       for (gssize i = 0; i < transfer->actual_length; i++)
         transfer->buffer[i] = MAX (0, MIN (255, base + ((i + self->frame_used) % 7 < 3 ? amplitude : -amplitude)));
-#if EH575_EXPERIMENTAL_SWIPE
-      if (!self->activating && self->frame_used == 0)
+      if (!self->activating && !self->frame_used)
         active_frames++;
-      if (!self->activating && !captured && active_frames < 30)
+      if (scenario == SETTLING_PRESS && !self->activating && !captured)
         {
           for (gssize i = 0; i < transfer->actual_length; i++)
             {
               guint index = i + self->frame_used;
-              guint row = index / EH575_WIDTH, col = index % EH575_WIDTH;
-              guint shift = scenario == SWIPE_STATIONARY ? 0 : active_frames * (scenario == SWIPE_FAST ? 24 : 6);
-              guint value = col * 0x9e3779b1U ^ (row + shift) * 0x85ebca6bU;
-              value ^= value >> 16;
-              value *= 0x7feb352dU;
-              value ^= value >> 15;
-              int signal = scenario == SWIPE_AMBIGUOUS ? (int) ((row + shift) % 5) * 20 - 40 : (int) (value % 81) - 40;
-              transfer->buffer[i] = base + (index % 7 < 3 ? 12 : -12) + signal;
+              guint shift = active_frames < 10 ? active_frames : 0;
+              int background = index % 7 < 3 ? 12 : -12;
+              int signal = (index + shift) % 7 < 3 ? 40 : -40;
+              transfer->buffer[i] = base + background + signal;
             }
         }
-      else if (!self->activating)
-        {
-          for (gssize i = 0; i < transfer->actual_length; i++)
-            transfer->buffer[i] = base + ((i + self->frame_used) % 7 < 3 ? 12 : -12);
-        }
-      if (scenario == SWIPE_CANCEL && self->swipe && self->swipe->count >= 2)
-        {
-          g_cancellable_cancel (parent_cancel);
-          error = g_error_new_literal (G_IO_ERROR, G_IO_ERROR_CANCELLED, "cancel swipe accumulation");
-        }
-#endif
       if (self->frame_used == 0)
         frames++;
       if (scenario == CANCEL_CALIBRATION && frames == 2)
@@ -252,7 +222,7 @@ new_device (Scenario selected)
 static void
 run_until_stopped (FpDeviceEgis0575 *self)
 {
-  gint64 deadline = g_get_monotonic_time () + 15000000;
+  gint64 deadline = g_get_monotonic_time () + 5000000;
 
   while (self->running && g_get_monotonic_time () < deadline)
     {
@@ -265,9 +235,6 @@ run_until_stopped (FpDeviceEgis0575 *self)
   g_assert_null (queued);
   g_assert_cmpuint (self->timer, ==, 0);
   g_assert_null (self->io_cancel);
-#if EH575_EXPERIMENTAL_SWIPE
-  g_assert_null (self->swipe);
-#endif
 }
 
 static void
@@ -299,6 +266,10 @@ test_capture (gconstpointer data)
   g_assert_cmpuint (errors, ==, 0);
   g_assert_cmpuint (captured, ==, 1);
   g_assert_cmpint (dc, ==, 32);
+  g_assert_cmpuint (retries, ==, 0);
+  g_assert_cmpint (fp_device_get_scan_type (FP_DEVICE (self)), ==, FP_SCAN_TYPE_PRESS);
+  if (scenario == SETTLING_PRESS)
+    g_assert_cmpuint (active_frames, >=, 12);
   g_object_unref (self);
   g_object_unref (parent_cancel);
 }
@@ -326,7 +297,6 @@ test_clean_reactivation (void)
   run_until_stopped (self);
   g_assert_false (self->poisoned);
   captured = 0;
-  active_frames = 0;
   dev_activate (FP_IMAGE_DEVICE (self));
   run_until_stopped (self);
   g_assert_cmpuint (activated, ==, 2);
@@ -336,25 +306,6 @@ test_clean_reactivation (void)
   g_object_unref (self);
   g_object_unref (parent_cancel);
 }
-
-#if EH575_EXPERIMENTAL_SWIPE
-static void
-test_swipe_retry (gconstpointer data)
-{
-  FpDeviceEgis0575 *self = new_device (GPOINTER_TO_INT (data));
-
-  dev_activate (FP_IMAGE_DEVICE (self));
-  run_until_stopped (self);
-  g_assert_cmpuint (activated, ==, 1);
-  g_assert_cmpuint (deactivated, ==, 1);
-  g_assert_cmpuint (captured, ==, 0);
-  g_assert_cmpuint (errors, ==, 0);
-  g_assert_cmpuint (retries, ==, 1);
-  g_assert_false (self->poisoned);
-  g_object_unref (self);
-  g_object_unref (parent_cancel);
-}
-#endif
 
 int
 main (int argc, char **argv)
@@ -366,14 +317,9 @@ main (int argc, char **argv)
   g_test_add_data_func ("/egis0575/calibration-cancel", GINT_TO_POINTER (CANCEL_CALIBRATION), test_failure);
   g_test_add_data_func ("/egis0575/early-finger", GINT_TO_POINTER (EARLY_FINGER), test_failure);
   g_test_add_data_func ("/egis0575/capture-lift", GINT_TO_POINTER (GOOD), test_capture);
+  g_test_add_data_func ("/egis0575/settling-press", GINT_TO_POINTER (SETTLING_PRESS), test_capture);
   g_test_add_data_func ("/egis0575/capture-cancel", GINT_TO_POINTER (CANCEL_COMPARISON), test_capture);
   g_test_add_func ("/egis0575/initial-cancel", test_initial_cancel);
   g_test_add_func ("/egis0575/clean-reactivation", test_clean_reactivation);
-#if EH575_EXPERIMENTAL_SWIPE
-  g_test_add_data_func ("/egis0575/swipe-stationary", GINT_TO_POINTER (SWIPE_STATIONARY), test_swipe_retry);
-  g_test_add_data_func ("/egis0575/swipe-ambiguous", GINT_TO_POINTER (SWIPE_AMBIGUOUS), test_swipe_retry);
-  g_test_add_data_func ("/egis0575/swipe-fast", GINT_TO_POINTER (SWIPE_FAST), test_swipe_retry);
-  g_test_add_data_func ("/egis0575/swipe-cancel", GINT_TO_POINTER (SWIPE_CANCEL), test_failure);
-#endif
   return g_test_run ();
 }

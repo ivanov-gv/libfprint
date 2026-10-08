@@ -5,7 +5,6 @@ import csv
 import io
 import itertools
 import importlib.util
-import json
 from pathlib import Path
 import subprocess
 import sys
@@ -45,13 +44,25 @@ for exception in (KeyboardInterrupt, EOFError):
         run.assert_not_called()
 print("Capture series readiness/failure/cancellation checks passed")
 
+# Stale swipe builds must be rejected before USB execution or state creation,
+# even though their binaries can still exist in old development directories.
 build = Path(binary).resolve().parents[1]
-options = json.loads((build / "meson-info/intro-buildoptions.json").read_text())
-if next((item["value"] for item in options if item["name"] == "egis0575_swipe"), False):
-    for command in ("enroll", "verify"):
-        result = subprocess.run([sys.executable, sys.argv[2], command, "--build", str(build)],
-                                capture_output=True, check=False)
-        assert result.returncode == 2
-        assert b"capture-only" in result.stderr
-        assert not result.stdout
-    print("Experimental swipe enrollment/verification guard checks passed")
+for command in ("capture", "capture-series", "enroll", "verify"):
+    with mock.patch.object(sys, "argv", [sys.argv[2], command, "--build", str(build)]), \
+            mock.patch.object(runner.os, "geteuid", return_value=1000), \
+            mock.patch.object(runner.json, "loads", return_value=[
+                {"name": "drivers", "value": "egis0575"},
+                {"name": "egis0575_swipe", "value": True}]), \
+            mock.patch.object(runner.os, "execve") as execute, \
+            mock.patch.object(runner.Path, "mkdir") as mkdir, \
+            mock.patch.object(sys, "stderr", new_callable=io.StringIO) as stderr:
+        try:
+            runner.main()
+        except SystemExit as error:
+            assert error.code == 2
+        else:
+            raise AssertionError("Stale swipe build was accepted")
+        assert "stationary press build" in stderr.getvalue()
+        execute.assert_not_called()
+        mkdir.assert_not_called()
+print("Retired swipe build rejection checks passed")

@@ -40,9 +40,8 @@ def main():
     drivers = next(item["value"] for item in options if item["name"] == "drivers")
     if drivers != "egis0575":
         parser.error("Use an isolated build with -Ddrivers=egis0575")
-    swipe = next((item["value"] for item in options if item["name"] == "egis0575_swipe"), False)
-    if swipe and args.command in ("enroll", "verify"):
-        parser.error("Experimental swipe is capture-only; establish acquisition quality before enrollment or verification")
+    if next((item["value"] for item in options if item["name"] == "egis0575_swipe"), False):
+        parser.error("Swipe acquisition has been retired; use a freshly compiled stationary press build")
     binary = build / "tests/eh575-smoke"
     if not binary.is_file():
         parser.error("Build the EH575 smoke-test executable first")

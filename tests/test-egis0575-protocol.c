@@ -51,6 +51,14 @@ main (void)
   for (size_t i = 0; i < EH575_FRAME_SIZE; i++)
     frame[i] = i % 2 ? 96 : 160;
   assert (eh575_deviation (frame, refs[1]) > 31);
+  assert (eh575_stationary_correlation (frame, frame, refs[1]) > .999);
+  for (size_t i = 0; i < EH575_FRAME_SIZE; i++)
+    refs[0][i] = frame[i] + 9 + (int) (i % 5) - 2;
+  assert (eh575_stationary_correlation (frame, refs[0], refs[1]) >= .97);
+  for (size_t i = 0; i < EH575_FRAME_SIZE; i++)
+    refs[0][i] = frame[(i + 1) % EH575_FRAME_SIZE];
+  assert (eh575_stationary_correlation (frame, refs[0], refs[1]) < .97);
+  assert (eh575_stationary_correlation (refs[1], refs[1], refs[1]) == -1);
   eh575_normalize (part, frame, refs[1]);
   assert (part[0] >= 191 && part[1] <= 65);
   memset (frame, 0, sizeof frame);

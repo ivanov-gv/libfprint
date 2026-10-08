@@ -117,6 +117,32 @@ eh575_clipped (const uint8_t *image)
   return (double) count / EH575_FRAME_SIZE;
 }
 
+/* Only compare stationary full-frame contact, with measured background and
+ * brightness offset removed. This is a burst-stability gate, not a matcher.
+ * Never shift, warp, stitch or manufacture additional fingerprint area.
+ */
+static inline double
+eh575_stationary_correlation (const uint8_t *a, const uint8_t *b, const uint8_t *background)
+{
+  double sa = 0, sb = 0, aa = 0, bb = 0, ab = 0;
+  const double n = EH575_FRAME_SIZE;
+
+  for (size_t i = 0; i < EH575_FRAME_SIZE; i++)
+    {
+      double av = a[i] - background[i], bv = b[i] - background[i];
+      sa += av;
+      sb += bv;
+      aa += av * av;
+      bb += bv * bv;
+      ab += av * bv;
+    }
+  aa -= sa * sa / n;
+  bb -= sb * sb / n;
+  if (aa / n < 64 || bb / n < 64)
+    return -1;
+  return (ab - sa * sb / n) / sqrt (aa * bb);
+}
+
 static inline void
 eh575_median (uint8_t *out, uint8_t frames[3][EH575_FRAME_SIZE])
 {
@@ -142,24 +168,18 @@ eh575_normalize (uint8_t *out, const uint8_t *frame, const uint8_t *background)
  * inventing additional sensor area. Border samples replicate the final pixel.
  */
 static inline void
-eh575_enlarge_image (uint8_t *out, const uint8_t *raw, size_t width, size_t height)
-{
-  for (size_t y = 0; y < height * 2; y++)
-    for (size_t x = 0; x < width * 2; x++)
-      {
-        size_t x0 = x / 2, y0 = y / 2;
-        size_t x1 = x0 + (x0 + 1 < width), y1 = y0 + (y0 + 1 < height);
-        unsigned int a = raw[y0 * width + x0], b = raw[y0 * width + x1];
-        unsigned int c = raw[y1 * width + x0], d = raw[y1 * width + x1];
-        out[y * width * 2 + x] = ((2 - x % 2) * (2 - y % 2) * a +
-                                  (x % 2) * (2 - y % 2) * b +
-                                  (2 - x % 2) * (y % 2) * c +
-                                  (x % 2) * (y % 2) * d) / 4;
-      }
-}
-
-static inline void
 eh575_enlarge (uint8_t *out, const uint8_t *raw)
 {
-  eh575_enlarge_image (out, raw, EH575_WIDTH, EH575_HEIGHT);
+  for (size_t y = 0; y < EH575_HEIGHT * 2; y++)
+    for (size_t x = 0; x < EH575_WIDTH * 2; x++)
+      {
+        size_t x0 = x / 2, y0 = y / 2;
+        size_t x1 = x0 + (x0 + 1 < EH575_WIDTH), y1 = y0 + (y0 + 1 < EH575_HEIGHT);
+        unsigned int a = raw[y0 * EH575_WIDTH + x0], b = raw[y0 * EH575_WIDTH + x1];
+        unsigned int c = raw[y1 * EH575_WIDTH + x0], d = raw[y1 * EH575_WIDTH + x1];
+        out[y * EH575_WIDTH * 2 + x] = ((2 - x % 2) * (2 - y % 2) * a +
+                                        (x % 2) * (2 - y % 2) * b +
+                                        (2 - x % 2) * (y % 2) * c +
+                                        (x % 2) * (y % 2) * d) / 4;
+      }
 }

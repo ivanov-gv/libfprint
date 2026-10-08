@@ -6,10 +6,6 @@
 #define FP_COMPONENT "egis0575"
 #include "drivers_api.h"
 #include "egis0575.h"
-#include "config.h"
-#if EH575_EXPERIMENTAL_SWIPE
-#include "egis0575-swipe.h"
-#endif
 
 typedef enum { COMMAND_INIT, COMMAND_DC_READ, COMMAND_DC_WRITE, COMMAND_REARM } CommandMode;
 
@@ -31,9 +27,6 @@ struct _FpDeviceEgis0575
   int                 dc, best_dc, low, high;
   double              best_distance;
   gboolean            searching, final_measurement;
-#if EH575_EXPERIMENTAL_SWIPE
-  Eh575Swipe         *swipe;
-#endif
 };
 G_DECLARE_FINAL_TYPE (FpDeviceEgis0575, fpi_device_egis0575, FPI, DEVICE_EGIS0575, FpImageDevice);
 G_DEFINE_TYPE (FpDeviceEgis0575, fpi_device_egis0575, FP_TYPE_IMAGE_DEVICE);
@@ -42,58 +35,6 @@ static void send_command (FpDeviceEgis0575 *self);
 static void start_frame (FpDeviceEgis0575 *self);
 static void read_frame (FpDeviceEgis0575 *self);
 static void process_frame (FpDeviceEgis0575 *self);
-
-#if EH575_EXPERIMENTAL_SWIPE
-static void
-clear_swipe (FpDeviceEgis0575 *self)
-{
-  if (self->swipe)
-    memset (self->swipe, 0, sizeof *self->swipe);
-  g_clear_pointer (&self->swipe, g_free);
-}
-
-static void
-complete_swipe (FpDeviceEgis0575 *self)
-{
-  FpImageDevice *dev = FP_IMAGE_DEVICE (self);
-  size_t width, height;
-  g_autofree uint8_t *raw = NULL;
-  FpImage *image;
-
-  if (!self->swipe || !eh575_swipe_dimensions (self->swipe, &width, &height))
-    {
-      clear_swipe (self);
-      fpi_image_device_retry_scan (dev, FP_DEVICE_RETRY_TOO_SHORT);
-    }
-  else
-    {
-      raw = g_malloc (width * height);
-      if (!eh575_swipe_assemble (self->swipe, raw, width * height))
-        {
-          memset (raw, 0, width * height);
-          clear_swipe (self);
-          fpi_image_device_retry_scan (dev, FP_DEVICE_RETRY_GENERAL);
-        }
-      else
-        {
-          image = fp_image_new (width * 2, height * 2);
-          eh575_enlarge_image (image->data, raw, width, height);
-          memset (raw, 0, width * height);
-          image->flags = FPI_IMAGE_PARTIAL;
-          fp_dbg ("Swipe assembled from %u aligned frames; measured crop %zu x %zu",
-                  self->swipe->count, width, height);
-          clear_swipe (self);
-          fpi_image_device_image_captured (dev, image);
-        }
-    }
-  /* Reporting/retry may synchronously deactivate and clear session state. */
-  if (self->running && !self->stopping)
-    {
-      self->operation_deadline = g_get_monotonic_time () + 30000000;
-      fpi_image_device_report_finger_status (dev, FALSE);
-    }
-}
-#endif
 
 static void
 finish (FpDeviceEgis0575 *self, GError *error)
@@ -112,9 +53,6 @@ finish (FpDeviceEgis0575 *self, GError *error)
   memset (self->samples, 0, sizeof self->samples);
   memset (self->frame, 0, sizeof self->frame);
   memset (self->background, 0, sizeof self->background);
-#if EH575_EXPERIMENTAL_SWIPE
-  clear_swipe (self);
-#endif
   if (self->stopping)
     {
       g_clear_error (&error);
@@ -451,26 +389,16 @@ process_frame (FpDeviceEgis0575 *self)
     {
       self->sample_count = self->bad_count = self->clear_count = 0;
       self->settle_until = g_get_monotonic_time () + 250000;
-#if EH575_EXPERIMENTAL_SWIPE
-      clear_swipe (self);
-      self->swipe = g_new0 (Eh575Swipe, 1);
-#endif
       fpi_image_device_report_finger_status (image_dev, TRUE);
     }
   else if (state == FPI_IMAGE_DEVICE_STATE_CAPTURE && !present)
     {
-#if EH575_EXPERIMENTAL_SWIPE
-      if (++self->clear_count == 3)
-        complete_swipe (self);
-#else
       fpi_image_device_retry_scan (image_dev, FP_DEVICE_RETRY_TOO_SHORT);
       if (!self->stopping)
         fpi_image_device_report_finger_status (image_dev, FALSE);
-#endif
     }
   else if (state == FPI_IMAGE_DEVICE_STATE_CAPTURE && g_get_monotonic_time () >= self->settle_until)
     {
-      self->clear_count = 0;
       if (eh575_deviation (self->frame, NULL) < 20 || eh575_clipped (self->frame) > .05)
         {
           self->sample_count = 0;
@@ -479,23 +407,20 @@ process_frame (FpDeviceEgis0575 *self)
         }
       else
         {
-#if EH575_EXPERIMENTAL_SWIPE
-          Eh575SwipeResult result;
           self->bad_count = 0;
-          eh575_normalize (self->frame, self->frame, self->background);
-          result = eh575_swipe_push (self->swipe, self->frame);
-          fp_dbg ("Swipe pair: result=%d frames=%u zero=%.4f best=%.4f margin=%.4f shift=(%d,%d)",
-                  result, self->swipe->count, self->swipe->zero, self->swipe->best,
-                  self->swipe->margin, self->swipe->dx, self->swipe->dy);
-          if (result == EH575_SWIPE_UNCERTAIN || result == EH575_SWIPE_REVERSED || result == EH575_SWIPE_LIMIT)
+          if (self->sample_count)
             {
-              fp_dbg ("Swipe acquisition rejected: %s; speed is not established",
-                      result == EH575_SWIPE_UNCERTAIN ? "ambiguous or weak alignment" :
-                      result == EH575_SWIPE_REVERSED ? "direction reversal" : "coverage or memory limit");
-              clear_swipe (self);
-              fpi_image_device_retry_scan (image_dev, FP_DEVICE_RETRY_GENERAL);
+              double correlation = eh575_stationary_correlation (self->samples[0], self->frame,
+                                                                 self->background);
+              if (correlation < .97)
+                {
+                  /* Wait for a steady burst, not a swipe or an immediate
+                   * motion retry. The existing scan deadline stays bounded.
+                   */
+                  fp_dbg ("Press contact settling: correlation=%.4f; restarting three-frame burst", correlation);
+                  self->sample_count = 0;
+                }
             }
-#else
           memcpy (self->samples[self->sample_count++], self->frame, EH575_FRAME_SIZE);
           if (self->sample_count == 3)
             {
@@ -504,10 +429,11 @@ process_frame (FpDeviceEgis0575 *self)
               eh575_normalize (self->frame, self->frame, self->background);
               eh575_enlarge (image->data, self->frame);
               image->flags = FPI_IMAGE_PARTIAL;
+              fp_dbg ("Stationary press captured from three stable frames; raw area %d x %d",
+                      EH575_WIDTH, EH575_HEIGHT);
               fpi_image_device_image_captured (image_dev, image);
               self->sample_count = 0;
             }
-#endif
         }
     }
   else if (state == FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF)
@@ -604,9 +530,6 @@ dev_activate (FpImageDevice *dev)
   self->stopping = self->searching = self->final_measurement = FALSE;
   self->sample_count = 0;
   self->low = 0;
-#if EH575_EXPERIMENTAL_SWIPE
-  clear_swipe (self);
-#endif
   self->high = 63;
   self->best_distance = 256;
   self->operation_deadline = g_get_monotonic_time () + 15000000;
@@ -661,17 +584,17 @@ fpi_device_egis0575_class_init (FpDeviceEgis0575Class *klass)
   FpImageDeviceClass *image_class = FP_IMAGE_DEVICE_CLASS (klass);
 
   device_class->id = "egis0575";
-  device_class->full_name = EH575_EXPERIMENTAL_SWIPE ? "EgisTec EH575 (experimental swipe)" : "EgisTec EH575 (experimental)";
+  device_class->full_name = "EgisTec EH575 (experimental)";
   device_class->type = FP_DEVICE_TYPE_USB;
   device_class->id_table = id_table;
-  device_class->scan_type = EH575_EXPERIMENTAL_SWIPE ? FP_SCAN_TYPE_SWIPE : FP_SCAN_TYPE_PRESS;
+  device_class->scan_type = FP_SCAN_TYPE_PRESS;
   device_class->nr_enroll_stages = 10;
   image_class->img_open = dev_open;
   image_class->img_close = dev_close;
   image_class->activate = dev_activate;
   image_class->deactivate = dev_deactivate;
   image_class->change_state = dev_change_state;
-  image_class->img_width = EH575_EXPERIMENTAL_SWIPE ? -1 : EH575_WIDTH * 2;
-  image_class->img_height = EH575_EXPERIMENTAL_SWIPE ? -1 : EH575_HEIGHT * 2;
+  image_class->img_width = EH575_WIDTH * 2;
+  image_class->img_height = EH575_HEIGHT * 2;
   /* Keep libfprint's default Bozorth3 threshold (40). */
 }

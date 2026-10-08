@@ -182,10 +182,6 @@ endif
 if 'egis0575' in drivers and gusb_dep.version().version_compare('< 0.3.3')
     error('egis0575 requires GUsb >= 0.3.3 for endpoint descriptor validation')
 endif
-if get_option('egis0575_swipe') and drivers != ['egis0575']
-    error('Experimental EH575 swipe requires an isolated -Ddrivers=egis0575 build')
-endif
-libfprint_conf.set10('EH575_EXPERIMENTAL_SWIPE', get_option('egis0575_swipe'))
 
 if not have_spi
     foreach driver: drivers

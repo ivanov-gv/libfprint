@@ -16,16 +16,40 @@ cancellation and real image capture have worked. The reported capture was
 206×104 pixels with **only two minutiae**. That is not evidence of usable
 native recognition. Enrollment, matching, placement tolerance, real fprintd
 lifecycle and GNOME unlocking remain unvalidated. Do not enable login yet.
-Five subsequent independent native captures produced **2, 2, 4, 2, 2** minutiae.
-An opt-in swipe acquisition build is now available for capture evaluation only;
-real swipe quality and matching are not yet established.
+Five subsequent independent native captures produced 2, 2, 4, 2, 2 minutiae.
 
-The portable protocol and nine mocked driver lifecycle cases, plus libfprint's
+The portable protocol and ten mocked driver lifecycle cases, plus libfprint's
 device and SSM suites, pass in a driver-only warnings-as-errors build. The
 native tests have also passed address/undefined/leak sanitizer testing during
 prototype development. Mocked callbacks do not prove real core transitions or
 biometric matching. Full upstream CI, introspection and USB emulation are pending.
 The working Python prototype's results are not native matching evidence.
+
+The swipe experiment was retired after repeated failed real-reader trials and
+user feedback on 2026-10-08. The active driver is press-only: place the pad flat,
+hold still until capture, then lift. Swipe sources/build options were removed;
+the experiment remains recoverable in Git history through `5a54ceee`.
+Old swipe binaries are rejected by the hardware runner. Build a fresh directory,
+rather than using `/tmp/eh575-libfprint-swipe-build`.
+
+After contact settling, capture requires three frames with full-frame,
+background-corrected correlation at least 0.97 to the burst's first frame.
+If contact changes, the burst restarts silently within the original 30-second
+deadline; no swipe alignment, travel requirement or "too fast" retry is used.
+This acquisition gate avoids combining different placements in a median image;
+it is not a fingerprint matching threshold or proof of usable recognition.
+The measured area remains 103×52 pixels; native feature scarcity remains an
+open problem. Login integration is not enabled.
+Offline replay of 48 within-touch frame pairs from the private prototype
+recording passed this stability gate (minimum correlation 0.985762). These are
+selected burst frames, not fresh hardware validation or matching evidence.
+
+The prepared stationary build on the development laptop is:
+
+```sh
+python3 scripts/eh575-run.py capture \
+  --build /tmp/eh575-libfprint-press-build --deps /tmp/eh575-native-deps/root
+```
 
 ## Isolated build, no installation
 
@@ -37,7 +61,7 @@ meson setup _build . \
   -Ddrivers=egis0575 -Dintrospection=false -Ddoc=false \
   -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
 meson compile -C _build
-meson test -C _build egis0575-protocol egis0575-driver egis0575-quality egis0575-swipe fpi-device fpi-ssm --print-errorlogs
+meson test -C _build egis0575-protocol egis0575-driver egis0575-quality fpi-device fpi-ssm --print-errorlogs
 ```
 
 This does not install anything or change PAM, fprintd, GNOME or USB permissions.
@@ -115,72 +139,7 @@ one zero extraction. At scale 2, gains 1 and 3 also yielded median 4. At scale 3
 some variants had higher counts (medians up to 6), but physical resolution and
 feature validity are unestablished. Neither this count experiment nor the old
 Python match results establish native recognition or justify threshold changes.
-The default press pipeline and all matching settings remain unchanged.
-
-## Opt-in experimental swipe capture
-
-The small press image does not consistently yield enough native features. A
-separate `-Degis0575_swipe=true` build now collects overlapping frames during
-one slow straight slide and assembles a larger measured area before native
-extraction. The default is `false`; enabling it requires `-Ddrivers=egis0575`
-alone. This development switch is not a proposed permanent upstream API.
-Both the Python and C hardware helpers refuse enrollment/verification in
-swipe mode. Do not install this build or load it into fprintd yet.
-
-For a normal dependency environment, build a new directory (do not change the
-press build):
-
-```sh
-meson setup /tmp/eh575-libfprint-swipe-build . \
-  -Ddrivers=egis0575 -Degis0575_swipe=true -Dintrospection=false -Ddoc=false \
-  -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
-meson compile -C /tmp/eh575-libfprint-swipe-build
-meson test -C /tmp/eh575-libfprint-swipe-build \
-  egis0575-protocol egis0575-driver egis0575-quality egis0575-swipe fpi-device fpi-ssm --print-errorlogs
-```
-
-The extracted-dependency build on this laptop is already prepared at that
-temporary path. Run just one swipe first:
-
-```sh
-python3 scripts/eh575-run.py capture \
-  --build /tmp/eh575-libfprint-swipe-build --deps /tmp/eh575-native-deps/root
-```
-
-Keep the reader empty until calibrated. Place the pad flat, briefly let it
-settle, then slide **slowly in one straight direction across the sensor's
-narrow dimension** for about 3–5 seconds. Move along the length of your finger
-so nearby overlapping pad areas pass over the reader; keep contact throughout.
-Then lift fully to finish. Unlike press capture, do not wait for “Captured”
-before lifting: the image is assembled after removal. An uncertain alignment,
-direction reversal or geometry limit now reports a general retry, not a claim
-that the finger moved too fast. If too short, increase the measured travel.
-Holding still must fail as a short swipe. No image/template is written.
-
-Optionally prefix that command with `G_MESSAGES_DEBUG=libfprint-egis0575` for
-driver-only frame-count/crop/rejection diagnostics, including zero-shift and
-best correlation, peak margin and estimated pair displacement. Results are
-0=first, 1=still, 2=moved, 3=uncertain, 4=reversed, 5=limit. These are acquisition
-measurements, not minutia coordinates or identity evidence. Do not enable `all` debug
-logging, which can include biometric coordinates from the native extractor.
-
-Real swipe trials on 2026-10-08 repeatedly failed, including a reported stationary
-finger; swipe acquisition is not working reliably. Saved within-touch frame
-pairs did not reproduce that failure. A synthetic noisy stationary periodic
-texture did expose a classification flaw: ambiguous peaks were rejected before
-considering stillness. Such frames are now conservatively discarded without
-adding area or changing the anchor; motion acceptance gates are unchanged.
-This correction needs a fresh real-reader test and is not a proven hardware fix.
-
-Tests cover both motion directions, exact measured crops, brightness shifts,
-stationary frames, periodic ambiguity, excessive speed/drift, coverage gaps,
-memory bounds, cancellation and clean reactivation. The swipe driver suite has
-thirteen mocked lifecycle cases; these still do not establish real core/matcher
-behavior. Each build passes the six selected suites. The synthetic swipe and
-driver suites also pass address/undefined/leak sanitizer testing outside the
-tracing sandbox. The real reader opens/closes with the swipe build. Real swipe capture,
-geometric accuracy, feature reliability and genuine/wrong-finger matching
-remain pending. More features alone are not proof of a better fingerprint.
+The production driver's acquisition, scale, flags and matching are unchanged.
 
 `enroll` requires ten independent right-index-finger touches. It writes a
 private biometric template, not images, under `.state/eh575` (directory 0700,
@@ -197,8 +156,8 @@ still needs testing.
 
 1. Measure native capture/minutiae quality across repeated placements. The
    physical image is 103×52; 2× interpolation does not add coverage or detail.
-   Investigate acquisition/preprocessing or overlapping swipe acquisition if
-   the press patch is insufficient. Do not lower the authentication threshold
+   Investigate stationary acquisition/preprocessing and whether native minutiae
+   matching is suitable for this small measured area. Do not lower the authentication threshold
    to make a demonstration pass.
 2. Establish real native enrollment and independent genuine/wrong-finger
    outcomes, including placement variation, reboot and suspend/resume. Any
