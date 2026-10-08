@@ -28,6 +28,9 @@ typedef struct
   int          x[EH575_SWIPE_MAX_FRAMES], y[EH575_SWIPE_MAX_FRAMES];
   unsigned int count;
   int          min_x, max_x, min_y, max_y, direction;
+  /* Last pair's acquisition diagnostics, never authentication evidence. */
+  double       zero, best, margin;
+  int          dx, dy;
 } Eh575Swipe;
 
 /* Incoming frame at (dx,dy) in the reference frame's coordinates. Compare
@@ -66,6 +69,9 @@ eh575_swipe_push (Eh575Swipe *swipe, const uint8_t *frame)
   double best = -1, second = -1;
   int best_x = 0, best_y = 0, x, y, min_x, max_x, min_y, max_y;
 
+  swipe->zero = swipe->best = -1;
+  swipe->margin = 0;
+  swipe->dx = swipe->dy = 0;
   if (swipe->count == 0)
     {
       if (eh575_deviation (frame, NULL) < 8)
@@ -81,7 +87,8 @@ eh575_swipe_push (Eh575Swipe *swipe, const uint8_t *frame)
   /* A stationary frame must not be assigned a nonzero shift by periodic
    * ridges. Keep the last accepted anchor so slow subpixel motion accumulates.
    */
-  if (eh575_swipe_correlation (swipe->frames[swipe->count - 1], frame, 0, 0) >= .995)
+  swipe->zero = eh575_swipe_correlation (swipe->frames[swipe->count - 1], frame, 0, 0);
+  if (swipe->zero >= .995)
     return EH575_SWIPE_STILL;
   for (int dy = -EH575_SWIPE_DY; dy <= EH575_SWIPE_DY; dy++)
     for (int dx = -EH575_SWIPE_DX; dx <= EH575_SWIPE_DX; dx++)
@@ -102,6 +109,19 @@ eh575_swipe_push (Eh575Swipe *swipe, const uint8_t *frame)
     for (int dx = -EH575_SWIPE_DX; dx <= EH575_SWIPE_DX; dx++)
       if (abs (dx - best_x) > 2 || abs (dy - best_y) > 2)
         second = fmax (second, scores[dy + EH575_SWIPE_DY][dx + EH575_SWIPE_DX]);
+  swipe->best = best;
+  swipe->margin = best - second;
+  swipe->dx = best_x;
+  swipe->dy = best_y;
+  /* Discard plausible stationary/noisy frames BEFORE requiring unique
+   * motion. Periodic ridges may have competing peaks even with no motion.
+   * This never appends a frame, changes the anchor or grants coverage.
+   * Keeping the anchor lets actual slow movement accumulate. Movement's
+   * acceptance thresholds below remain unchanged.
+   */
+  if (best >= .90 && ((abs (best_x) <= 2 && abs (best_y) < 2) ||
+                      (swipe->zero >= .90 && swipe->zero >= best - .025)))
+    return EH575_SWIPE_STILL;
   if (best < .90 || best - second < .025 || abs (best_x) == EH575_SWIPE_DX ||
       abs (best_y) == EH575_SWIPE_DY)
     return EH575_SWIPE_UNCERTAIN;

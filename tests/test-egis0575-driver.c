@@ -140,6 +140,12 @@ test_image (FpImageDevice *dev, FpImage *image)
 static void
 test_retry (FpImageDevice *dev, FpDeviceRetry reason)
 {
+#if EH575_EXPERIMENTAL_SWIPE
+  if (scenario == SWIPE_STATIONARY)
+    g_assert_cmpint (reason, ==, FP_DEVICE_RETRY_TOO_SHORT);
+  else if (scenario == SWIPE_AMBIGUOUS || scenario == SWIPE_FAST)
+    g_assert_cmpint (reason, ==, FP_DEVICE_RETRY_GENERAL);
+#endif
   retries++;
   dev_change_state (dev, FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF);
 }

@@ -152,13 +152,25 @@ settle, then slide **slowly in one straight direction across the sensor's
 narrow dimension** for about 3–5 seconds. Move along the length of your finger
 so nearby overlapping pad areas pass over the reader; keep contact throughout.
 Then lift fully to finish. Unlike press capture, do not wait for “Captured”
-before lifting: the image is assembled after removal. If too fast/uncertain,
-try a slower, straighter slide; if too short, increase the measured travel.
+before lifting: the image is assembled after removal. An uncertain alignment,
+direction reversal or geometry limit now reports a general retry, not a claim
+that the finger moved too fast. If too short, increase the measured travel.
 Holding still must fail as a short swipe. No image/template is written.
 
 Optionally prefix that command with `G_MESSAGES_DEBUG=libfprint-egis0575` for
-driver-only frame-count/crop/rejection diagnostics. Do not enable `all` debug
+driver-only frame-count/crop/rejection diagnostics, including zero-shift and
+best correlation, peak margin and estimated pair displacement. Results are
+0=first, 1=still, 2=moved, 3=uncertain, 4=reversed, 5=limit. These are acquisition
+measurements, not minutia coordinates or identity evidence. Do not enable `all` debug
 logging, which can include biometric coordinates from the native extractor.
+
+Real swipe trials on 2026-10-08 repeatedly failed, including a reported stationary
+finger; swipe acquisition is not working reliably. Saved within-touch frame
+pairs did not reproduce that failure. A synthetic noisy stationary periodic
+texture did expose a classification flaw: ambiguous peaks were rejected before
+considering stillness. Such frames are now conservatively discarded without
+adding area or changing the anchor; motion acceptance gates are unchanged.
+This correction needs a fresh real-reader test and is not a proven hardware fix.
 
 Tests cover both motion directions, exact measured crops, brightness shifts,
 stationary frames, periodic ambiguity, excessive speed/drift, coverage gaps,

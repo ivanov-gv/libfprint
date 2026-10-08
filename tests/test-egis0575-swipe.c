@@ -70,6 +70,30 @@ main (void)
     assert (eh575_swipe_push (swipe, frame) == EH575_SWIPE_STILL);
   assert (swipe->count == 1);
   assert (!eh575_swipe_dimensions (swipe, &width, &height));
+  /* Noisy stationary periodic ridges have competing alignment peaks.
+   * Unlike exact duplicates, these bypass the .995 zero fast path.
+   * Discard them without fabricating travel or changing the anchor.
+   */
+  memset (swipe, 0, sizeof *swipe);
+  for (int trial = 0; trial < 8; trial++)
+    {
+      for (int row = 0; row < EH575_HEIGHT; row++)
+        for (int col = 0; col < EH575_WIDTH; col++)
+          frame[row * EH575_WIDTH + col] = 40 + (row % 5) * 30 +
+                                           (int) (texture (col + trial * 107, row) % 25) - 12;
+      assert (eh575_swipe_push (swipe, frame) == (trial ? EH575_SWIPE_STILL : EH575_SWIPE_FIRST));
+      if (trial)
+        assert (swipe->zero >= .90 && swipe->zero < .995 && swipe->margin < .025);
+    }
+  assert (swipe->count == 1 && swipe->min_y == 0 && swipe->max_y == 0);
+  assert (!eh575_swipe_dimensions (swipe, &width, &height));
+  assert (!eh575_swipe_assemble (swipe, output, sizeof output));
+  memset (swipe, 0, sizeof *swipe);
+  make_frame (frame, 0, 0, 0);
+  assert (eh575_swipe_push (swipe, frame) == EH575_SWIPE_FIRST);
+  make_frame (frame, 1, 1, 0);
+  assert (eh575_swipe_push (swipe, frame) == EH575_SWIPE_STILL);
+  assert (swipe->count == 1);
   make_frame (frame, 0, 8, 9);
   assert (eh575_swipe_push (swipe, frame) == EH575_SWIPE_MOVED); /* brightness independent */
   make_frame (frame, 0, 40, 0);

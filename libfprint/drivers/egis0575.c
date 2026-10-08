@@ -484,12 +484,16 @@ process_frame (FpDeviceEgis0575 *self)
           self->bad_count = 0;
           eh575_normalize (self->frame, self->frame, self->background);
           result = eh575_swipe_push (self->swipe, self->frame);
+          fp_dbg ("Swipe pair: result=%d frames=%u zero=%.4f best=%.4f margin=%.4f shift=(%d,%d)",
+                  result, self->swipe->count, self->swipe->zero, self->swipe->best,
+                  self->swipe->margin, self->swipe->dx, self->swipe->dy);
           if (result == EH575_SWIPE_UNCERTAIN || result == EH575_SWIPE_REVERSED || result == EH575_SWIPE_LIMIT)
             {
-              fp_dbg ("Swipe acquisition rejected, reason %d, after %u aligned frames",
-                      result, self->swipe->count);
+              fp_dbg ("Swipe acquisition rejected: %s; speed is not established",
+                      result == EH575_SWIPE_UNCERTAIN ? "ambiguous or weak alignment" :
+                      result == EH575_SWIPE_REVERSED ? "direction reversal" : "coverage or memory limit");
               clear_swipe (self);
-              fpi_image_device_retry_scan (image_dev, FP_DEVICE_RETRY_TOO_FAST);
+              fpi_image_device_retry_scan (image_dev, FP_DEVICE_RETRY_GENERAL);
             }
 #else
           memcpy (self->samples[self->sample_count++], self->frame, EH575_FRAME_SIZE);
