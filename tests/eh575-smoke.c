@@ -19,8 +19,13 @@ cancel_scan (gpointer data)
 static void
 finger_status (FpDevice *dev, GParamSpec *spec, gpointer data)
 {
-  if (fp_device_get_finger_status (dev) & FP_FINGER_STATUS_NEEDED)
+  FpFingerStatusFlags status = fp_device_get_finger_status (dev);
+  gboolean *prompted = data;
+  gboolean ready = (status & FP_FINGER_STATUS_NEEDED) && !(status & FP_FINGER_STATUS_PRESENT);
+
+  if (ready && !*prompted)
     g_print ("Reader calibrated. Place your finger flat and hold still; lift fully after capture.\n");
+  *prompted = ready;
 }
 
 static void
@@ -43,6 +48,7 @@ main (int argc, char **argv)
   GPtrArray *devices;
   guint signal_id, timer_id = 0;
   gboolean ok = FALSE;
+  gboolean prompted = FALSE;
   const char *command;
   umask (0077);
   if (geteuid () == 0 || argc != 2)
@@ -81,7 +87,7 @@ main (int argc, char **argv)
     }
   g_print ("Opened %s using %s.\n", fp_device_get_name (dev), fp_device_get_driver (dev));
   signal_id = g_unix_signal_add (SIGINT, cancel_scan, cancel);
-  g_signal_connect (dev, "notify::finger-status", G_CALLBACK (finger_status), NULL);
+  g_signal_connect (dev, "notify::finger-status", G_CALLBACK (finger_status), &prompted);
   if (!strcmp (command, "open"))
     {
       ok = TRUE;

@@ -18,6 +18,16 @@ if 'egis0575' in drivers
     dependencies: libfprint_dep,
     install: false,
   )
+  eh575_quality = executable('eh575-quality', 'eh575-quality.c',
+    include_directories: include_directories('../libfprint'),
+    dependencies: [libfprint_dep, mathlib_dep],
+    install: false,
+  )
+  test('egis0575-quality', python3,
+    args: [files('test-egis0575-quality.py'), eh575_quality, files('../scripts/eh575-run.py')],
+    env: ['G_MESSAGES_DEBUG=', 'G_DEBUG=fatal-warnings'],
+    suite: ['drivers', 'egis0575'],
+  )
 endif
 
 envs = environment()

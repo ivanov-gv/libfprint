@@ -34,7 +34,7 @@ meson setup _build . \
   -Ddrivers=egis0575 -Dintrospection=false -Ddoc=false \
   -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
 meson compile -C _build
-meson test -C _build egis0575-protocol egis0575-driver fpi-device fpi-ssm --print-errorlogs
+meson test -C _build egis0575-protocol egis0575-driver egis0575-quality fpi-device fpi-ssm --print-errorlogs
 ```
 
 This does not install anything or change PAM, fprintd, GNOME or USB permissions.
@@ -64,6 +64,55 @@ Keep the reader empty until “Reader calibrated”, then hold your pad flat unt
 capture and lift fully. `capture` reports dimensions/minutiae and discards the
 image. `open` tests discovery/claim/release; `idle` calibrates and cancels after
 three seconds without a finger.
+
+To measure independent native touches before changing acquisition, run:
+
+```sh
+python3 scripts/eh575-run.py capture-series \
+  --build /tmp/eh575-libfprint-github-build --deps /tmp/eh575-native-deps/root
+```
+
+This takes five independent captures, reopening the reader for each. Lift fully
+and press Enter with the reader empty before each calibration. After “Reader
+calibrated”, place the finger flat with small placement variations. The series
+stops on a failed capture or Ctrl+C. It prints counts, saves no images/templates
+and does not enroll or authenticate. Keep its output for development comparison.
+
+## Offline acquisition-quality investigation
+
+`tests/eh575-quality` consumes exactly 10,712 bytes from stdin: a raw 103×52
+uint8 median followed by its measured empty reference. It never opens USB or
+writes files. It compares gains 1/2/3, bilinear scales 1/2/3 and both polarities
+through native minutiae extraction, printing counts only. The current-driver
+variant calls the actual `eh575_normalize` and `eh575_enlarge` helpers. All
+variants keep partial-image perimeter filtering and the native extractor's
+defaults. These are offline experiments, NOT authentication settings. Scale
+changes alter apparent ridge geometry; more extracted points can be artifacts.
+
+For a private recording made by the separate Python prototype, NumPy is required
+only by this optional replay adapter (not the driver or CI). For example, from
+this clone, using the existing prototype environment on the development laptop:
+
+```sh
+../fingerprint/.venv/bin/python scripts/eh575-replay.py \
+  ../fingerprint/.state/coverage-v3/enrollment.npz \
+  --build /tmp/eh575-libfprint-github-build --deps /tmp/eh575-native-deps/root
+```
+
+The adapter forms one median per touch, pairs it with its measured reference
+and sends it to the diagnostic in memory. It prints aggregates, not images,
+minutia coordinates or individual labels. No data is imported into native
+enrollment, published or saved. Treat recordings as sensitive even when a
+directory is Git-ignored.
+
+Local investigation on 2026-10-08 used 24 previously recorded enrollment touches,
+each with three frames and its own empty reference. The current pipeline
+(gain 2, scale 2, original polarity) yielded **0..8 minutiae, median 4**, with
+one zero extraction. At scale 2, gains 1 and 3 also yielded median 4. At scale 3,
+some variants had higher counts (medians up to 6), but physical resolution and
+feature validity are unestablished. Neither this count experiment nor the old
+Python match results establish native recognition or justify threshold changes.
+The production driver's acquisition, scale, flags and matching are unchanged.
 
 `enroll` requires ten independent right-index-finger touches. It writes a
 private biometric template, not images, under `.state/eh575` (directory 0700,

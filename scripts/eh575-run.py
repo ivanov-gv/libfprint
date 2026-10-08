@@ -5,11 +5,30 @@ import argparse
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
+
+
+def capture_series(binary, env):
+    print("Five independent native captures. No images or templates will be saved.", flush=True)
+    try:
+        for trial in range(1, 6):
+            input(f"Trial {trial}/5: lift fully, leave the reader empty, then press Enter: ")
+            print("Wait for calibration, then touch with a small placement variation.", flush=True)
+            result = subprocess.run([str(binary), "capture"], env=env, check=False)
+            if result.returncode:
+                print("Series stopped after an unsuccessful capture; no automatic retry.", flush=True)
+                return result.returncode if result.returncode > 0 else 1
+    except (KeyboardInterrupt, EOFError):
+        print("\nCapture series stopped.", flush=True)
+        return 130
+    print("Completed 5/5 captures. Minutiae counts do not establish matching reliability.", flush=True)
+    return 0
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("open", "idle", "capture", "enroll", "verify"))
+    parser.add_argument("command", choices=("open", "idle", "capture", "capture-series", "enroll", "verify"))
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--deps", type=Path, help="Optional extracted dependency prefix, not a system installation")
     parser.add_argument("--state", type=Path, default=Path(__file__).resolve().parents[1] / ".state/eh575")
@@ -44,8 +63,10 @@ def main():
     env["FP_DRIVERS_ALLOWLIST"] = "egis0575"
     os.umask(0o077)
     os.chdir(state)
+    if args.command == "capture-series":
+        return capture_series(binary, env)
     os.execve(binary, [str(binary), args.command], env)
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
