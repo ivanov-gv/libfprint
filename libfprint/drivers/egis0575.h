@@ -142,18 +142,24 @@ eh575_normalize (uint8_t *out, const uint8_t *frame, const uint8_t *background)
  * inventing additional sensor area. Border samples replicate the final pixel.
  */
 static inline void
-eh575_enlarge (uint8_t *out, const uint8_t *raw)
+eh575_enlarge_image (uint8_t *out, const uint8_t *raw, size_t width, size_t height)
 {
-  for (size_t y = 0; y < EH575_HEIGHT * 2; y++)
-    for (size_t x = 0; x < EH575_WIDTH * 2; x++)
+  for (size_t y = 0; y < height * 2; y++)
+    for (size_t x = 0; x < width * 2; x++)
       {
         size_t x0 = x / 2, y0 = y / 2;
-        size_t x1 = x0 + (x0 + 1 < EH575_WIDTH), y1 = y0 + (y0 + 1 < EH575_HEIGHT);
-        unsigned int a = raw[y0 * EH575_WIDTH + x0], b = raw[y0 * EH575_WIDTH + x1];
-        unsigned int c = raw[y1 * EH575_WIDTH + x0], d = raw[y1 * EH575_WIDTH + x1];
-        out[y * EH575_WIDTH * 2 + x] = ((2 - x % 2) * (2 - y % 2) * a +
-                                        (x % 2) * (2 - y % 2) * b +
-                                        (2 - x % 2) * (y % 2) * c +
-                                        (x % 2) * (y % 2) * d) / 4;
+        size_t x1 = x0 + (x0 + 1 < width), y1 = y0 + (y0 + 1 < height);
+        unsigned int a = raw[y0 * width + x0], b = raw[y0 * width + x1];
+        unsigned int c = raw[y1 * width + x0], d = raw[y1 * width + x1];
+        out[y * width * 2 + x] = ((2 - x % 2) * (2 - y % 2) * a +
+                                  (x % 2) * (2 - y % 2) * b +
+                                  (2 - x % 2) * (y % 2) * c +
+                                  (x % 2) * (y % 2) * d) / 4;
       }
+}
+
+static inline void
+eh575_enlarge (uint8_t *out, const uint8_t *raw)
+{
+  eh575_enlarge_image (out, raw, EH575_WIDTH, EH575_HEIGHT);
 }

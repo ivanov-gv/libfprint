@@ -6,12 +6,20 @@ if 'egis0575' in drivers
   )
   test('egis0575-protocol', eh575_protocol_test,
     suite: ['drivers', 'egis0575'])
+  eh575_swipe_test = executable('test-egis0575-swipe',
+    'test-egis0575-swipe.c',
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: mathlib_dep,
+  )
+  test('egis0575-swipe', eh575_swipe_test,
+    suite: ['drivers', 'egis0575'])
   eh575_driver_test = executable('test-egis0575-driver',
     'test-egis0575-driver.c',
     include_directories: include_directories('../libfprint/drivers'),
     dependencies: libfprint_private_dep,
   )
   test('egis0575-driver', eh575_driver_test,
+    timeout: 90,
     env: ['G_DEBUG=fatal-warnings'],
     suite: ['drivers', 'egis0575'])
   executable('eh575-smoke', 'eh575-smoke.c',

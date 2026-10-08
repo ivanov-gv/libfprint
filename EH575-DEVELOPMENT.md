@@ -16,6 +16,9 @@ cancellation and real image capture have worked. The reported capture was
 206×104 pixels with **only two minutiae**. That is not evidence of usable
 native recognition. Enrollment, matching, placement tolerance, real fprintd
 lifecycle and GNOME unlocking remain unvalidated. Do not enable login yet.
+Five subsequent independent native captures produced **2, 2, 4, 2, 2** minutiae.
+An opt-in swipe acquisition build is now available for capture evaluation only;
+real swipe quality and matching are not yet established.
 
 The portable protocol and nine mocked driver lifecycle cases, plus libfprint's
 device and SSM suites, pass in a driver-only warnings-as-errors build. The
@@ -34,7 +37,7 @@ meson setup _build . \
   -Ddrivers=egis0575 -Dintrospection=false -Ddoc=false \
   -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
 meson compile -C _build
-meson test -C _build egis0575-protocol egis0575-driver egis0575-quality fpi-device fpi-ssm --print-errorlogs
+meson test -C _build egis0575-protocol egis0575-driver egis0575-quality egis0575-swipe fpi-device fpi-ssm --print-errorlogs
 ```
 
 This does not install anything or change PAM, fprintd, GNOME or USB permissions.
@@ -112,7 +115,60 @@ one zero extraction. At scale 2, gains 1 and 3 also yielded median 4. At scale 3
 some variants had higher counts (medians up to 6), but physical resolution and
 feature validity are unestablished. Neither this count experiment nor the old
 Python match results establish native recognition or justify threshold changes.
-The production driver's acquisition, scale, flags and matching are unchanged.
+The default press pipeline and all matching settings remain unchanged.
+
+## Opt-in experimental swipe capture
+
+The small press image does not consistently yield enough native features. A
+separate `-Degis0575_swipe=true` build now collects overlapping frames during
+one slow straight slide and assembles a larger measured area before native
+extraction. The default is `false`; enabling it requires `-Ddrivers=egis0575`
+alone. This development switch is not a proposed permanent upstream API.
+Both the Python and C hardware helpers refuse enrollment/verification in
+swipe mode. Do not install this build or load it into fprintd yet.
+
+For a normal dependency environment, build a new directory (do not change the
+press build):
+
+```sh
+meson setup /tmp/eh575-libfprint-swipe-build . \
+  -Ddrivers=egis0575 -Degis0575_swipe=true -Dintrospection=false -Ddoc=false \
+  -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
+meson compile -C /tmp/eh575-libfprint-swipe-build
+meson test -C /tmp/eh575-libfprint-swipe-build \
+  egis0575-protocol egis0575-driver egis0575-quality egis0575-swipe fpi-device fpi-ssm --print-errorlogs
+```
+
+The extracted-dependency build on this laptop is already prepared at that
+temporary path. Run just one swipe first:
+
+```sh
+python3 scripts/eh575-run.py capture \
+  --build /tmp/eh575-libfprint-swipe-build --deps /tmp/eh575-native-deps/root
+```
+
+Keep the reader empty until calibrated. Place the pad flat, briefly let it
+settle, then slide **slowly in one straight direction across the sensor's
+narrow dimension** for about 3–5 seconds. Move along the length of your finger
+so nearby overlapping pad areas pass over the reader; keep contact throughout.
+Then lift fully to finish. Unlike press capture, do not wait for “Captured”
+before lifting: the image is assembled after removal. If too fast/uncertain,
+try a slower, straighter slide; if too short, increase the measured travel.
+Holding still must fail as a short swipe. No image/template is written.
+
+Optionally prefix that command with `G_MESSAGES_DEBUG=libfprint-egis0575` for
+driver-only frame-count/crop/rejection diagnostics. Do not enable `all` debug
+logging, which can include biometric coordinates from the native extractor.
+
+Tests cover both motion directions, exact measured crops, brightness shifts,
+stationary frames, periodic ambiguity, excessive speed/drift, coverage gaps,
+memory bounds, cancellation and clean reactivation. The swipe driver suite has
+thirteen mocked lifecycle cases; these still do not establish real core/matcher
+behavior. Each build passes the six selected suites. The synthetic swipe and
+driver suites also pass address/undefined/leak sanitizer testing outside the
+tracing sandbox. The real reader opens/closes with the swipe build. Real swipe capture,
+geometric accuracy, feature reliability and genuine/wrong-finger matching
+remain pending. More features alone are not proof of a better fingerprint.
 
 `enroll` requires ten independent right-index-finger touches. It writes a
 private biometric template, not images, under `.state/eh575` (directory 0700,

@@ -1,3 +1,7 @@
+option('egis0575_swipe',
+       description: 'Experimental capture-only EH575 swipe acquisition for isolated hardware evaluation',
+       type: 'boolean',
+       value: false)
 option('drivers',
        description: 'Drivers to integrate, "default" selects the default set, "all" selects all drivers',
        type: 'string',

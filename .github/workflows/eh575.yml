@@ -7,13 +7,16 @@ permissions:
 jobs:
   build-and-test:
     runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        swipe: ['false', 'true']
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential meson ninja-build pkg-config libglib2.0-dev libgusb-dev libusb-1.0-0-dev
       - name: Build without installation
         run: |
-          meson setup "$RUNNER_TEMP/eh575-build" . -Ddrivers=egis0575 -Dintrospection=false -Ddoc=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
+          meson setup "$RUNNER_TEMP/eh575-build" . -Ddrivers=egis0575 -Degis0575_swipe=${{ matrix.swipe }} -Dintrospection=false -Ddoc=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
           meson compile -C "$RUNNER_TEMP/eh575-build"
       - name: Synthetic driver and core unit tests
-        run: meson test -C "$RUNNER_TEMP/eh575-build" egis0575-protocol egis0575-driver egis0575-quality fpi-device fpi-ssm --print-errorlogs
+        run: meson test -C "$RUNNER_TEMP/eh575-build" egis0575-protocol egis0575-driver egis0575-quality egis0575-swipe fpi-device fpi-ssm --print-errorlogs

@@ -5,6 +5,8 @@ import csv
 import io
 import itertools
 import importlib.util
+import json
+from pathlib import Path
 import subprocess
 import sys
 from unittest import mock
@@ -42,3 +44,14 @@ for exception in (KeyboardInterrupt, EOFError):
         assert runner.capture_series(binary, {}) == 130
         run.assert_not_called()
 print("Capture series readiness/failure/cancellation checks passed")
+
+build = Path(binary).resolve().parents[1]
+options = json.loads((build / "meson-info/intro-buildoptions.json").read_text())
+if next((item["value"] for item in options if item["name"] == "egis0575_swipe"), False):
+    for command in ("enroll", "verify"):
+        result = subprocess.run([sys.executable, sys.argv[2], command, "--build", str(build)],
+                                capture_output=True, check=False)
+        assert result.returncode == 2
+        assert b"capture-only" in result.stderr
+        assert not result.stdout
+    print("Experimental swipe enrollment/verification guard checks passed")

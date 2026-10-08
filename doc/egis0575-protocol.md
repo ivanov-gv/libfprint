@@ -66,6 +66,37 @@ be passed to libfprint's pixman resizing helper, which requires aligned rows.
 Orientation, physical resolution, gain choice, pressure effects and actual
 minutiae reliability need hardware evaluation. No Bozorth3 threshold is changed.
 
+## Experimental swipe acquisition (off by default)
+
+An isolated `-Ddrivers=egis0575 -Degis0575_swipe=true` build uses the same USB
+commands, calibration, contact gates and deadlines. After 250 ms of settling,
+each usable moving frame is normalized independently; it is NOT medianed with
+other unaligned moving frames. The last accepted anchor is retained while
+stationary/subpixel motion accumulates. Search integer translations dx ±8,
+dy ±16, using brightness-centered normalized correlation on actual overlap.
+Require correlation ≥0.90 and ≥0.025 separation from other peaks outside a
+two-pixel alignment basin. Reject search-boundary optima, uncertain/periodic
+alignments, horizontal-only travel and direction reversals. Stationary frames
+do not add coverage. Accepted progress has |dy| ≥2 and ≥65% pairwise overlap.
+These are conservative experimental geometry checks, not matching evidence.
+
+Bound acquisition to 128 accepted frames, height 512 raw rows and horizontal
+drift that retains at least 71 real columns. On three empty frames, require
+at least eight aligned frames and raw height ≥156 (three sensor-heights).
+Crop columns to the intersection of every frame's footprint and average only
+measured samples. If any output pixel is uncovered, fail rather than pad it.
+Use bounded 2× bilinear interpolation and retain `FPI_IMAGE_PARTIAL` filtering.
+Clear in-memory frames on completion/error/cancellation. No geometric or
+biometric correctness on real moving fingers is claimed by synthetic tests.
+
+libfprint's generic frame estimator searches from dy=2 even for stationary
+input and its assembler pads the canvas and sets sensor-specific orientation
+flags. This experiment instead uses a bounded measured-pixel helper to avoid
+forced motion, ambiguous ridge aliases and unseen padding for this sensor.
+Maintainer review and real hardware evaluation are required before selecting
+the final acquisition/assembly design. The test helpers reject swipe enrollment
+and verification; nothing installs this build into the authentication stack.
+
 ## Provenance and evidence boundaries
 
 The tables derive from SandroRoque/python-egistec-eh575, MIT, commit
