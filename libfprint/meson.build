@@ -115,6 +115,7 @@ driver_sources = {
         'drivers/upek_proto.c',
     ),
     'etes603' : files('drivers/etes603.c'),
+    'egis0575' : files('drivers/egis0575.c'),
     'egis0570' : files('drivers/egis0570.c'),
     'egismoc' : files('drivers/egismoc/egismoc.c'),
     'egis_etu905' : files('drivers/egismoc/egis_etu905.c'),

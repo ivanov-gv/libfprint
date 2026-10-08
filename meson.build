@@ -129,6 +129,7 @@ drivers_info = {
     'vfs301': { 'endian_dependent': true },
     'vfs0050': { 'endian_dependent': true },
     'etes603': {},
+    'egis0575': {},
     'egis0570': {},
     'egismoc': {},
     'egis_etu905': {},
@@ -176,6 +177,10 @@ endif
 
 if drivers == [ 'default' ]
     drivers = default_drivers
+endif
+
+if 'egis0575' in drivers and gusb_dep.version().version_compare('< 0.3.3')
+    error('egis0575 requires GUsb >= 0.3.3 for endpoint descriptor validation')
 endif
 
 if not have_spi

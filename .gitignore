@@ -1,3 +1,6 @@
 *.o
 *.swp
 _build
+.state/
+.captures/
+__pycache__/
