@@ -14,11 +14,13 @@ background = bytes([128]) * size
 def noise(seed):
     rng = random.Random(seed)
     return bytes(rng.randrange(40, 211) for _ in range(size))
-def payload(reference, probe):
-    return struct.pack('<I', 6) + (reference + background) * 6 + probe * 5 + background
-def check(reference, probe, cancel=False):
+def payload(reference, probe, gallery=None, frames=None):
+    gallery = gallery or [reference] * 6
+    frames = frames or [probe] * 5
+    return struct.pack('<I', len(gallery)) + b''.join(image + background for image in gallery) + b''.join(frames) + background
+def check(reference, probe, cancel=False, gallery=None, frames=None):
     result = subprocess.run([binary] + (['cancel'] if cancel else []),
-                            input=payload(reference, probe), capture_output=True, check=True, timeout=100)
+                            input=payload(reference, probe, gallery, frames), capture_output=True, check=True, timeout=100)
     assert not result.stderr
     return json.loads(result.stdout)
 for data in (b'', bytes(4), struct.pack('<I', 25), struct.pack('<I', 6) + bytes(size)):
@@ -26,6 +28,16 @@ for data in (b'', bytes(4), struct.pack('<I', 25), struct.pack('<I', 6) + bytes(
     assert result.returncode == 2 and not result.stdout
 a = noise(1)
 assert check(a, a)['accepted']
+# An early valid match must not hide a bad LAST gallery area.
+assert check(a, a, gallery=[a] * 14 + [background])['status'] == 3
+# Gallery acceptance remains an OR, including a match in the LAST area.
+b = noise(2)
+assert check(a, a, gallery=[b] * 14 + [a])['accepted']
+# Still require at least three of the SAME five frames against ONE area.
+assert not check(a, a, frames=[a, a, b, b, b])['accepted']
+assert check(a, a, frames=[a, a, a, b, b])['accepted']
+# Two different enrolled areas cannot pool their two matching frames.
+assert not check(a, a, gallery=[a, b] * 3, frames=[a, a, b, b, noise(3)])['accepted']
 assert not check(a, noise(2))['accepted']
 assert check(a, background)['status'] == 2
 assert not check(background, a)['accepted']

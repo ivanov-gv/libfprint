@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
 
 spec = importlib.util.spec_from_file_location(
     "eh575_package", Path(__file__).resolve().parents[1] / "scripts/eh575-package.py")
@@ -12,6 +13,15 @@ package = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package)
 
 class PackagePolicy(unittest.TestCase):
+    def test_descendant_versions_increase_even_when_hashes_do_not(self):
+        old = package.version_for_commit("f" * 40, 2086)
+        new = package.version_for_commit("0" * 40, 2087)
+        for first, second in (("0.1+git.4ab3b17e0b90", old), (old, new)):
+            self.assertEqual(subprocess.run(["dpkg", "--compare-versions", first, "lt", second]).returncode, 0)
+        for revision, count in (("invalid", 2086), ("0" * 40, 0), ("0" * 40, -1)):
+            with self.assertRaises(ValueError):
+                package.version_for_commit(revision, count)
+
     def dynamic(self):
         return "Library soname: [libfprint-2.so.2]\n" + "\n".join(
             f"Shared library: [libopencv_{name}.so.410]" for name in package.MODULES)

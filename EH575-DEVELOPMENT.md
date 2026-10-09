@@ -15,8 +15,10 @@ as the upstream baseline and do driver work on `codex/egis0575`. The GitHub
 Native discovery, claim/release, initialization, idle exposure calibration,
 cancellation and real image capture have worked. The reported capture was
 206×104 pixels with **only two minutiae**. That is not evidence of usable
-native recognition. Real-device enrollment, matching, placement tolerance, fprintd
-lifecycle and GNOME unlocking remain unvalidated. Do not enable login yet.
+native recognition through the DEFAULT NBIS path. The opt-in ridge path has
+subsequently completed local system enrollment/verification and user-reported
+GNOME unlock on this laptop; see the trial guide for the limits of that evidence.
+This is not population validation or security certification.
 Five subsequent independent native captures produced 2, 2, 4, 2, 2 minutiae.
 
 The portable protocol and ten mocked driver lifecycle cases, plus libfprint's
@@ -40,7 +42,8 @@ deadline; no swipe alignment, travel requirement or "too fast" retry is used.
 This acquisition gate avoids combining different placements in a median image;
 it is not a fingerprint matching threshold or proof of usable recognition.
 The measured area remains 103×52 pixels; native feature scarcity remains an
-open problem. Login integration is not enabled.
+open problem for the default NBIS path. The separate opt-in ridge trial has
+changed system fprintd's library selection on the development laptop only.
 The new experimental ridge build bypasses NBIS rather than lowering its threshold;
 verification uses five steady frames with the same acquisition stability gate.
 Offline replay of 48 within-touch frame pairs from the private prototype
@@ -134,6 +137,53 @@ No recordings or biometric templates are published. Optional diagnostic:
   ../fingerprint/.state/coverage-v3/audits/20261008T184020093520Z \
   --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root
 ```
+
+### Matching latency optimization
+
+The user reported working GNOME unlock but roughly three seconds of matching
+latency. A preserved pre-change diagnostic binary took about 2.9 seconds for a
+synthetic 15-area gallery. The native matcher now:
+
+- Computes ONLY the NCC used to rank coarse candidates, deferring unchanged
+  overlap/edge/regional corroboration to every refined candidate and all five
+  final frames. The search angles, scales, candidate count and ECC bounds remain.
+- Validates/prepares EVERY gallery area before an early match can return, so a
+  valid early area cannot hide an invalid later one.
+- Uses translation-only NCC to ORDER areas, never to filter or accept them.
+  Any attempted area still undergoes the full registration and ambiguity checks.
+- Stops after one enrolled area passes the existing three-of-five shared-transform
+  quorum. This preserves the existing OR-over-areas decision policy; it does not
+  pool frames from different areas or lower thresholds. Cancellation is checked
+  before return. No-match scans still exhaust the gallery.
+
+A match's diagnostic area/score now describes the first fully accepted area, not
+necessarily the exhaustive search's highest-scoring area. Enrollment format,
+five captured frames, 0.97 capture stability, contact/settling gates, acceptance
+thresholds and suspend cleanup are unchanged. Existing native enrollments can be
+reused; re-enrollment is not needed for this optimization.
+
+The optional replay tool accepts `--baseline /path/to/preserved/eh575-ridge-check`
+and `--repeats 1..3`. It alternates execution order, checks each trial's status and
+accept/reject decision against the baseline, and emits only aggregate timing and
+counts. Timing includes subprocess startup and is NOT live touch-to-GNOME latency.
+Historical selected recordings are not fresh validation or security proof.
+On the final 2026-10-09 before/after replay, ALL 32 statuses and accept/reject
+decisions agreed: 7/8 genuine touches accepted, 0/24 wrong-finger touches accepted,
+zero invalid/matcher failures. Process-inclusive median genuine-probe comparison
+time fell from 4401.4 ms to 379.7 ms; wrong-finger median was 4423.6 ms versus
+4038.9 ms. The unmatched genuine still required a full search (4078.0 ms maximum).
+These are same-host diagnostic measurements, not a live GNOME latency promise;
+capture/calibration and desktop scheduling are additional. A three-run synthetic
+15-area identity benchmark was about 2.9 seconds before versus 0.39 seconds after.
+Do not publish the private inputs. Native tests additionally cover invalid LAST
+gallery area, match in a later area, two-versus-three-frame quorum and prohibition
+on pooling evidence across gallery areas. Nine selected suites and three sanitizer
+suites passed during this optimization.
+
+Prepared update packages now use `0.2+git.COMMITCOUNT.HASH`, rather than hash-only
+versions that can sort backwards. Descendant checkpoints on this branch therefore
+upgrade in normal dpkg order. The builder still only prepares an artifact; it does
+not install it or change system/PAM/GNOME configuration.
 
 Selected tests include synthetic texture identity, wrong texture, blank images,
 periodic ambiguity, malformed input and cancellation; real public libfprint core
@@ -273,9 +323,12 @@ post-resume wrong-finger rejection. The user approved and installed the
 discovers the native press device with 15 enrollment stages; its existing
 hardening and PAM/daemon file checksums were checked and remain unchanged.
 System library selection HAS changed; private templates were not copied.
-There is no system enrollment yet. Actual system enrollment/verification,
-GNOME lock/password fallback and system-service sleep recovery still need
-testing. Do not install the old `de8e9eab` trial artifact.
+The user subsequently completed system enrollment, an enrolled-finger match and
+four completed non-enrolled-finger rejections. Early-touch errors in the journal
+were calibration failures, not comparisons. GNOME unlock was reported working,
+with approximately three seconds of matching latency. Separate explicit password
+fallback, system-service suspend/cold-boot checks and fresh testing of the faster
+build remain. Do not install the old `de8e9eab` trial artifact.
 
 ### Default stationary image driver
 

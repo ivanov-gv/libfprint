@@ -121,6 +121,20 @@ scores (const Prepared &probe, const Prepared &reference, const cv::Mat &transfo
   return s;
 }
 
+double
+coarse_correlation (const Prepared &probe, const Prepared &reference, const cv::Mat &transform)
+{
+  cv::Mat aligned, mask;
+
+  cv::warpAffine (probe.ridge, aligned, transform, cv::Size (W, H));
+  cv::warpAffine (probe.mask, mask, transform, cv::Size (W, H), cv::INTER_NEAREST);
+  mask &= reference.mask;
+  /* Coarse candidates are ranked ONLY by NCC. Edge/region corroboration is
+   * still computed for every refined candidate and all five final frames.
+   */
+  return ncc (aligned, reference.ridge, mask);
+}
+
 bool
 geometry (const cv::Mat &transform)
 {
@@ -248,7 +262,7 @@ registration (const Prepared &probe, const Prepared &reference, Candidate &best,
             cv::Mat shifted = transform.clone ();
             shifted.at<double> (0, 2) += position.x - 50;
             shifted.at<double> (1, 2) += position.y - 30;
-            candidates.push_back ({scores (probe, reference, shifted), shifted});
+            candidates.push_back ({{0, coarse_correlation (probe, reference, shifted), 0, 0}, shifted});
             int left = std::max (0, position.x - 2), top = std::max (0, position.y - 2);
             cv::Rect region (left, top, std::min (peaks.cols, position.x + 3) - left,
                              std::min (peaks.rows, position.y + 3) - top);
@@ -358,6 +372,13 @@ eh575_ridge_compare (const Eh575RidgeTouch *touches, unsigned int count, const E
           result.status = EH575_RIDGE_POOR_IMAGE;
           return result;
         }
+      /* Validate the ENTIRE gallery before the early match exit. Otherwise a
+       * valid first area could hide a malformed/poor-quality later area that
+       * the exhaustive matcher would reject. No template/schema policy changes.
+       */
+      std::vector<Prepared> references (count);
+      struct OrderedArea { double priority; unsigned int index; };
+      std::vector<OrderedArea> order;
       for (unsigned int i = 0; i < count; i++)
         {
           if (cancelled (cancel))
@@ -365,14 +386,35 @@ eh575_ridge_compare (const Eh575RidgeTouch *touches, unsigned int count, const E
               result.status = EH575_RIDGE_CANCELLED;
               return result;
             }
-          Prepared reference;
-          Candidate best;
-          double margin;
-          if (!prepare (touches[i].image, touches[i].background, reference))
+          if (!prepare (touches[i].image, touches[i].background, references[i]))
             {
               result.status = EH575_RIDGE_INVALID;
               return result;
             }
+          /* Translation-only NCC is an ordering hint, NEVER evidence for
+           * acceptance or a filter. Every attempted area still gets the full
+           * rotation/scale/affine search and ambiguity/corroboration checks.
+           */
+          cv::Mat hint = surface (representative.ridge, references[i].ridge,
+                                  representative.mask, references[i].mask);
+          double peak;
+          cv::minMaxLoc (hint, nullptr, &peak);
+          order.push_back ({peak, i});
+        }
+      std::stable_sort (order.begin (), order.end (), [] (const OrderedArea &a, const OrderedArea &b) {
+          return a.priority > b.priority;
+        });
+      for (const OrderedArea &area : order)
+        {
+          if (cancelled (cancel))
+            {
+              result.status = EH575_RIDGE_CANCELLED;
+              return result;
+            }
+          const unsigned int i = area.index;
+          const Prepared &reference = references[i];
+          Candidate best;
+          double margin;
           if (!registration (representative, reference, best, margin, cancel))
             continue;
           unsigned int matched = 0;
@@ -389,6 +431,13 @@ eh575_ridge_compare (const Eh575RidgeTouch *touches, unsigned int count, const E
               result.margin = margin;
               result.status = matched >= 3 ? EH575_RIDGE_MATCH : EH575_RIDGE_NO_MATCH;
             }
+          /* Acceptance is an OR over enrolled areas, not a best-area policy.
+           * Once one fully registered area passes the unchanged shared-transform
+           * five-frame quorum and ambiguity gates, remaining areas cannot undo
+           * that match. Cancellation is checked again below before returning.
+           */
+          if (result.status == EH575_RIDGE_MATCH)
+            break;
         }
       if (cancelled (cancel))
         result.status = EH575_RIDGE_CANCELLED;

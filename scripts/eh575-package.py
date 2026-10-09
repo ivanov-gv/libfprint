@@ -68,6 +68,15 @@ def elf_policy(text):
         raise ValueError("Do not deploy a sanitizer-instrumented library")
 
 
+def version_for_commit(revision, count):
+    # Hash-only versions can sort backwards and make an update a downgrade.
+    # Descendant checkpoints on this development branch have increasing counts.
+    count = int(count)
+    if count <= 0 or re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", revision) is None:
+        raise ValueError("Expected a full Git revision and positive commit count")
+    return "0.2+git." + str(count) + "." + revision[:12]
+
+
 def control(version, architecture, revision):
     return f"""Package: {PACKAGE}
 Version: {version}
@@ -160,7 +169,7 @@ def main():
         if command(["git", "-C", repo, "status", "--porcelain"]):
             raise ValueError("Commit the source checkpoint before preparing a deployment package")
         revision = command(["git", "-C", repo, "rev-parse", "HEAD"])
-        version = "0.1+git." + revision[:12]
+        version = version_for_commit(revision, command(["git", "-C", repo, "rev-list", "--count", "HEAD"]))
         build = args.build.resolve(strict=True)
         info = json.loads((build / "meson-info/meson-info.json").read_text())
         if Path(info["directories"]["source"]).resolve() != repo:

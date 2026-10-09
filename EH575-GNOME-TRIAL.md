@@ -59,14 +59,28 @@ Post-install read-only checks confirmed:
   Its ELF has no RPATH/RUNPATH or sanitizer dependency.
 - Checksums of common-auth, gdm-password, gdm-fingerprint and the stock fprintd
   executable match the pre-install baseline. Distribution libfprint is retained.
-- There is NO system enrollment yet; no private template was copied.
+- At the initial post-install check there was NO system enrollment; no private
+  template was copied. A fresh system enrollment was subsequently completed.
 
 Reading the root daemon's `/proc/PID/maps` required an interactive sudo password,
 so direct mapped-path inspection was not completed. Native device discovery,
 service configuration and installed artifact identity were checked independently.
-Real system enrollment/verification, enrollment PolicyKit, GNOME lock/password
-fallback and system-service sleep recovery remain UNTESTED. Do those next; do not
-treat successful private tests as proof that the GNOME trial is complete.
+The user subsequently completed ordinary system enrollment (15 touches, with a
+recoverable retry), an enrolled-finger match and four completed non-enrolled-finger
+rejections. The other `verify-unknown-error` results corresponded to journal
+errors `Keep the EH575 reader empty during calibration`, not completed comparisons.
+The user reported GNOME unlock working, but with roughly three seconds of matching
+latency. Explicit separate password-fallback, system-service sleep/cold-boot
+results and fresh testing of the faster update remain unconfirmed. Do not treat
+these small functional checks as security certification.
+
+The speed update keeps the same stored template format and thresholds; existing
+system enrollment can be reused. Package versions starting `0.2+git.COUNT.HASH`
+sort after the original `0.1` trial and increase for descendant checkpoints.
+Use normal `apt-get --no-remove install /absolute/path/to/reviewed-update.deb` for
+an approved update: `--no-upgrade` would prevent updating this installed package.
+Review that only this trial package changes. No re-enrollment or PAM/GDM change is
+part of the performance update; repeat genuine/wrong-finger and suspend checks.
 
 For another installation, repeat the physical same-daemon lifecycle and
 wrong-finger gates BEFORE installation. A separate session started after wake
