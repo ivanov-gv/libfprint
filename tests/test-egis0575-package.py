@@ -66,6 +66,12 @@ class PackagePolicy(unittest.TestCase):
             self.assertIn("/opt/eh575-libfprint/lib", dropin)
             self.assertNotIn("/tmp", dropin)
             self.assertNotIn("StateDirectory=", dropin)
+            self.assertNotIn("STATE_DIRECTORY=", dropin)
+            self.assertIn("FP_EH575_CALIBRATION_DIR=/var/lib/eh575-libfprint/calibration", dropin)
+            self.assertIn("ReadWritePaths=/var/lib/eh575-libfprint/calibration", dropin)
+            cache = payload / "var/lib/eh575-libfprint/calibration"
+            self.assertEqual(cache.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(list(cache.iterdir()), [])
             for script in ("postinst", "postrm"):
                 text = (payload / "DEBIAN" / script).read_text()
                 self.assertNotIn("pam-auth-update", text)

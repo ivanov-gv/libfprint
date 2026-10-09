@@ -7,6 +7,7 @@
 #define FP_COMPONENT "egis0575"
 #include "drivers_api.h"
 #include "egis0575.h"
+#include "egis0575-calibration.h"
 #include "config.h"
 #ifdef EH575_TEST_IMAGE
 #undef EH575_EXPERIMENTAL_RIDGE
@@ -25,31 +26,34 @@ typedef enum { COMMAND_INIT, COMMAND_DC_READ, COMMAND_DC_WRITE, COMMAND_REARM } 
 
 struct _FpDeviceEgis0575
 {
-  Eh575Device         parent;
-  GCancellable       *io_cancel;
-  gulong              cancel_handler;
-  guint               timer;
-  gboolean            running, pending, activating, stopping, poisoned, wire_dirty;
-  CommandMode         mode;
-  FpiImageDeviceState image_state;
-  size_t              command_index;
-  Eh575Command        command;
-  uint8_t             frame[EH575_FRAME_SIZE], samples[5][EH575_FRAME_SIZE], background[EH575_FRAME_SIZE];
-  size_t              frame_used;
-  gint64              frame_deadline, operation_deadline, settle_until;
-  unsigned int        sample_count, clear_count, bad_count;
-  int                 dc, best_dc, low, high;
-  double              best_distance;
-  gboolean            searching, final_measurement;
+  Eh575Device              parent;
+  GCancellable            *io_cancel;
+  gulong                   cancel_handler;
+  guint                    timer;
+  gboolean                 running, pending, activating, stopping, poisoned, wire_dirty;
+  CommandMode              mode;
+  FpiImageDeviceState      image_state;
+  size_t                   command_index;
+  Eh575Command             command;
+  uint8_t                  frame[EH575_FRAME_SIZE], samples[5][EH575_FRAME_SIZE], background[EH575_FRAME_SIZE];
+  size_t                   frame_used;
+  gint64                   frame_deadline, operation_deadline, settle_until;
+  unsigned int             sample_count, clear_count, bad_count;
+  int                      dc, best_dc, low, high;
+  double                   best_distance;
+  gboolean                 searching, final_measurement;
+  Eh575Calibration         calibration;
+  Eh575CalibrationIdentity calibration_identity;
+  gboolean                 calibration_candidate, calibration_identity_valid, early_notified;
 #if EH575_EXPERIMENTAL_RIDGE
-  FpiDeviceAction     action;
-  GPtrArray          *enrollment;
-  FpPrint            *enroll_print;
-  FpImage            *capture_image;
-  GError             *action_error;
-  Eh575RidgeResult    match;
-  guint               stages;
-  gboolean            matching;
+  FpiDeviceAction          action;
+  GPtrArray               *enrollment;
+  FpPrint                 *enroll_print;
+  FpImage                 *capture_image;
+  GError                  *action_error;
+  Eh575RidgeResult         match;
+  guint                    stages;
+  gboolean                 matching;
 #endif
 };
 #if EH575_EXPERIMENTAL_RIDGE
@@ -64,6 +68,23 @@ static void send_command (FpDeviceEgis0575 *self);
 static void start_frame (FpDeviceEgis0575 *self);
 static void read_frame (FpDeviceEgis0575 *self);
 static void process_frame (FpDeviceEgis0575 *self);
+
+static const char *
+calibration_directory (FpDeviceEgis0575 *self)
+{
+  /* Virtual test devices can use memory only. Never write to a guessed path. */
+  return self->calibration_identity.bus && self->calibration_identity.address ?
+         g_getenv ("FP_EH575_CALIBRATION_DIR") : NULL;
+}
+
+static void
+forget_calibration (FpDeviceEgis0575 *self)
+{
+  memset (&self->calibration, 0, sizeof self->calibration);
+  self->calibration_candidate = FALSE;
+  if (self->calibration_identity_valid)
+    eh575_calibration_store (&self->calibration, &self->calibration_identity, calibration_directory (self));
+}
 #if EH575_EXPERIMENTAL_RIDGE
 static void finish (FpDeviceEgis0575 *self,
                     GError           *error);
@@ -85,7 +106,11 @@ finish (FpDeviceEgis0575 *self, GError *error)
     }
   g_clear_object (&self->io_cancel);
   /* An interrupted wire transaction may leave an ACK or image queued. */
-  self->poisoned |= self->wire_dirty || error != NULL;
+  if (self->wire_dirty || (error && error->domain != FP_DEVICE_RETRY))
+    {
+      self->poisoned = TRUE;
+      forget_calibration (self);
+    }
   memset (self->samples, 0, sizeof self->samples);
   memset (self->frame, 0, sizeof self->frame);
   memset (self->background, 0, sizeof self->background);
@@ -184,6 +209,8 @@ frame_interval (FpDeviceEgis0575 *self, gint64 now)
 static void
 set_dc (FpDeviceEgis0575 *self, int dc)
 {
+  if (self->calibration_candidate && dc != self->calibration.bytes[10])
+    forget_calibration (self);
   self->dc = dc;
   self->sample_count = 0;
   self->mode = COMMAND_DC_WRITE;
@@ -297,7 +324,7 @@ command_reply_cb (FpiUsbTransfer *transfer, FpDevice *dev, gpointer data, GError
       if (transfer->buffer[5] > 63)
         protocol_error (self);
       else
-        set_dc (self, transfer->buffer[5]);
+        set_dc (self, self->calibration_candidate ? self->calibration.bytes[10] : transfer->buffer[5]);
       break;
 
     case COMMAND_DC_WRITE:
@@ -355,6 +382,25 @@ start_frame (FpDeviceEgis0575 *self)
 }
 
 static void
+calibration_ready (FpDeviceEgis0575 *self, gboolean measured_empty)
+{
+  if (measured_empty && self->calibration_identity_valid &&
+      eh575_calibration_identity (&self->calibration_identity))
+    {
+      eh575_calibration_record (&self->calibration, &self->calibration_identity, self->dc, self->background);
+      eh575_calibration_store (&self->calibration, &self->calibration_identity, calibration_directory (self));
+    }
+  self->calibration_candidate = FALSE;
+  self->early_notified = FALSE;
+  self->sample_count = 0;
+  self->activating = FALSE;
+  self->operation_deadline = g_get_monotonic_time () + 30000000;
+  fpi_image_device_activate_complete (EH575_DEVICE (self), NULL);
+  if (!self->stopping)
+    self->timer = g_timeout_add (frame_interval (self, g_get_monotonic_time ()), continue_frame, self);
+}
+
+static void
 calibrate_frame (FpDeviceEgis0575 *self)
 {
   double mean = 0, clipped = 0;
@@ -365,9 +411,52 @@ calibrate_frame (FpDeviceEgis0575 *self)
       start_frame (self);
       return;
     }
+  if (self->calibration_candidate)
+    {
+      const guint8 *background = self->calibration.bytes + 80;
+      double change = eh575_deviation (self->frame, background);
+      if (eh575_deviation (self->frame, NULL) >= 20 && eh575_clipped (self->frame) <= .05 && change >= 8)
+        {
+          /* Only a previously measured empty background may bootstrap contact.
+           * Keep the normal settling, quality, five-frame and matching gates.
+           * Do not renew the cache's lifetime from a finger-present frame.
+           */
+          memcpy (self->background, background, EH575_FRAME_SIZE);
+          fp_dbg ("Reusing compatible empty-reader calibration for early contact");
+          calibration_ready (self, FALSE);
+          return;
+        }
+      if (change > 4 || fabs (eh575_mean (self->frame) - eh575_mean (background)) > 16)
+        forget_calibration (self);
+    }
   if (eh575_deviation (self->frame, NULL) > 18)
     {
-      finish (self, fpi_device_error_new_msg (FP_DEVICE_ERROR_GENERAL, "Keep the EH575 reader empty during calibration"));
+      /* Do not measure exposure or a background from a finger. Restart the
+       * complete empty burst after lift, without extending the deadline.
+       */
+      self->sample_count = 0;
+      if (!self->early_notified)
+        {
+          self->early_notified = TRUE;
+          fp_dbg ("No usable calibration: lift finger briefly, then touch again");
+#if EH575_EXPERIMENTAL_RIDGE
+          if (self->action == FPI_DEVICE_ACTION_VERIFY)
+            {
+              /* libfprint allows one report per verify operation. Stock
+               * fprintd restarts retry results within the same D-Bus request.
+               * Suppress repeated retries while the restarted scan waits.
+               */
+              finish (self, fpi_device_retry_new_msg (FP_DEVICE_RETRY_REMOVE_FINGER,
+                                                      "Lift briefly to calibrate EH575, then touch again"));
+              return;
+            }
+          if (self->action == FPI_DEVICE_ACTION_ENROLL)
+            fpi_device_enroll_progress (FP_DEVICE (self), self->stages, NULL,
+                                        fpi_device_retry_new (FP_DEVICE_RETRY_REMOVE_FINGER));
+#endif
+        }
+      if (self->running && !self->stopping)
+        self->timer = g_timeout_add (80, continue_frame, self);
       return;
     }
   memcpy (self->samples[self->sample_count - 2], self->frame, EH575_FRAME_SIZE);
@@ -394,12 +483,7 @@ calibrate_frame (FpDeviceEgis0575 *self)
           return;
         }
       eh575_median (self->background, self->samples);
-      self->sample_count = 0;
-      self->activating = FALSE;
-      self->operation_deadline = g_get_monotonic_time () + 30000000;
-      fpi_image_device_activate_complete (EH575_DEVICE (self), NULL);
-      if (!self->stopping)
-        self->timer = g_timeout_add (frame_interval (self, g_get_monotonic_time ()), continue_frame, self);
+      calibration_ready (self, TRUE);
       return;
     }
   if (self->searching)
@@ -568,6 +652,7 @@ dev_open (Eh575Device *dev)
   if (!error)
     g_usb_device_claim_interface (usb, 0, 0, &error);
   self->poisoned = error != NULL;
+  self->early_notified = FALSE;
   fpi_image_device_open_complete (dev, g_steal_pointer (&error));
 }
 
@@ -596,7 +681,24 @@ dev_activate (Eh575Device *dev)
   self->low = 0;
   self->high = 63;
   self->best_distance = 256;
-  self->operation_deadline = g_get_monotonic_time () + 15000000;
+  self->calibration_identity_valid = eh575_calibration_identity (&self->calibration_identity);
+  if (FP_DEVICE_GET_CLASS (dev)->type == FP_DEVICE_TYPE_USB)
+    {
+      GUsbDevice *usb = fpi_device_get_usb_device (FP_DEVICE (dev));
+      if (usb)
+        {
+          self->calibration_identity.bus = g_usb_device_get_bus (usb);
+          self->calibration_identity.address = g_usb_device_get_address (usb);
+        }
+    }
+  self->calibration_candidate = FALSE;
+  if (self->calibration_identity_valid)
+    {
+      if (!eh575_calibration_compatible (&self->calibration, &self->calibration_identity))
+        eh575_calibration_load (&self->calibration, &self->calibration_identity, calibration_directory (self));
+      self->calibration_candidate = eh575_calibration_compatible (&self->calibration, &self->calibration_identity);
+    }
+  self->operation_deadline = g_get_monotonic_time () + 30000000;
   self->io_cancel = g_cancellable_new ();
   self->cancel_handler = g_signal_connect_swapped (parent, "cancelled", G_CALLBACK (g_cancellable_cancel), self->io_cancel);
   if (g_cancellable_is_cancelled (parent))

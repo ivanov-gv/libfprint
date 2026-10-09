@@ -34,7 +34,7 @@ static void test_retry (FpImageDevice *dev,
 #include "egis0575.c"
 
 typedef enum { GOOD, BAD_ACK, TRUNCATED, OVERFLOW, CANCEL_CALIBRATION, CANCEL_COMPARISON, EARLY_FINGER,
-               SETTLING_PRESS } Scenario;
+               SETTLING_PRESS, EARLY_TIMEOUT } Scenario;
 static Scenario scenario;
 static GCancellable *parent_cancel;
 static FpiUsbTransfer *queued;
@@ -174,7 +174,7 @@ dispatch (FpDeviceEgis0575 *self)
     {
       int base = MAX (0, MIN (255, 128 + (dc - 32) * 23));
       int amplitude = self->activating ? 12 : (captured ? 12 : 40);
-      if (scenario == EARLY_FINGER)
+      if ((scenario == EARLY_FINGER && self->activating && frames < 6) || scenario == EARLY_TIMEOUT)
         amplitude = 40;
       transfer->actual_length = self->frame_used ? 236 : 5120;
       if (scenario == OVERFLOW)
@@ -198,6 +198,8 @@ dispatch (FpDeviceEgis0575 *self)
         }
       if (self->frame_used == 0)
         frames++;
+      if (scenario == EARLY_TIMEOUT && frames == 2)
+        self->operation_deadline = g_get_monotonic_time () + 1000;
       if (scenario == CANCEL_CALIBRATION && frames == 2)
         {
           g_cancellable_cancel (parent_cancel);
@@ -329,6 +331,29 @@ test_polling_policy (void)
   g_object_unref (parent_cancel);
 }
 
+static void
+test_cached_early_contact (void)
+{
+  FpDeviceEgis0575 *self = new_device (GOOD);
+
+  dev_activate (FP_IMAGE_DEVICE (self));
+  run_until_stopped (self);
+  g_assert_true (self->calibration.valid);
+  guint8 saved[EH575_CALIBRATION_SIZE];
+  memcpy (saved, self->calibration.bytes, sizeof saved);
+  captured = frames = 0;
+  scenario = EARLY_FINGER;
+  dc = 36; /* Initialization must restore the cached DC before using its bg. */
+  dev_activate (FP_IMAGE_DEVICE (self));
+  run_until_stopped (self);
+  g_assert_cmpuint (errors, ==, 0);
+  g_assert_cmpuint (captured, ==, 1);
+  g_assert_cmpint (dc, ==, 32);
+  g_assert_cmpmem (saved, sizeof saved, self->calibration.bytes, sizeof saved);
+  g_object_unref (self);
+  g_object_unref (parent_cancel);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -337,12 +362,14 @@ main (int argc, char **argv)
   g_test_add_data_func ("/egis0575/truncated", GINT_TO_POINTER (TRUNCATED), test_failure);
   g_test_add_data_func ("/egis0575/overflow", GINT_TO_POINTER (OVERFLOW), test_failure);
   g_test_add_data_func ("/egis0575/calibration-cancel", GINT_TO_POINTER (CANCEL_CALIBRATION), test_failure);
-  g_test_add_data_func ("/egis0575/early-finger", GINT_TO_POINTER (EARLY_FINGER), test_failure);
+  g_test_add_data_func ("/egis0575/early-finger-lift-recovery", GINT_TO_POINTER (EARLY_FINGER), test_capture);
+  g_test_add_data_func ("/egis0575/cold-early-contact-deadline", GINT_TO_POINTER (EARLY_TIMEOUT), test_failure);
   g_test_add_data_func ("/egis0575/capture-lift", GINT_TO_POINTER (GOOD), test_capture);
   g_test_add_data_func ("/egis0575/settling-press", GINT_TO_POINTER (SETTLING_PRESS), test_capture);
   g_test_add_data_func ("/egis0575/capture-cancel", GINT_TO_POINTER (CANCEL_COMPARISON), test_capture);
   g_test_add_func ("/egis0575/initial-cancel", test_initial_cancel);
   g_test_add_func ("/egis0575/clean-reactivation", test_clean_reactivation);
   g_test_add_func ("/egis0575/polling-policy", test_polling_policy);
+  g_test_add_func ("/egis0575/cached-early-contact-restores-dc", test_cached_early_contact);
   return g_test_run ();
 }

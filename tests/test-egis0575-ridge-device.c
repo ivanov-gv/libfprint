@@ -20,6 +20,8 @@ fast_timeout (guint delay, GSourceFunc callback, gpointer data)
 
 static guint submitted;
 static gboolean wrong_finger;
+static gboolean early_contact;
+static guint calibration_frames, release_after;
 static GCancellable *cancel_enroll;
 typedef struct { FpiUsbTransfer        *transfer;
                  FpiUsbTransferCallback callback;
@@ -60,6 +62,12 @@ fake_dispatch (gpointer data)
     {
       t->actual_length = self->frame_used ? 236 : 5120;
       gboolean contact = !self->activating && self->image_state != FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF;
+      if (self->activating && early_contact)
+        {
+          if (!self->frame_used)
+            calibration_frames++;
+          contact = !release_after || calibration_frames <= release_after;
+        }
       for (gssize i = 0; i < t->actual_length; i++)
         {
           guint index = i + self->frame_used;
@@ -222,6 +230,91 @@ test_cancel_enroll (void)
 }
 
 static void
+test_early_contact (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  g_autoptr(GError) error = NULL;
+  FpDeviceEgis0575 *self = FPI_DEVICE_EGIS0575 (dev);
+  wrong_finger = early_contact = FALSE;
+  g_autoptr(FpPrint) print = enroll (dev, NULL, &error);
+  g_assert_no_error (error);
+  guint8 saved[EH575_CALIBRATION_SIZE];
+  memcpy (saved, self->calibration.bytes, sizeof saved);
+  early_contact = TRUE;
+  release_after = calibration_frames = 0;
+  gboolean match;
+  g_assert_true (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (match);
+  g_assert_cmpuint (calibration_frames, ==, 2);
+  g_assert_cmpmem (saved, sizeof saved, self->calibration.bytes, sizeof saved);
+  assert_clean (dev);
+  wrong_finger = TRUE;
+  g_assert_true (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_false (match);
+  assert_clean (dev);
+  wrong_finger = FALSE;
+  memset (&self->calibration, 0, sizeof self->calibration);
+  g_assert_false (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
+  g_assert_error (error, FP_DEVICE_RETRY, FP_DEVICE_RETRY_REMOVE_FINGER);
+  g_clear_error (&error);
+  g_assert_false (self->poisoned);
+  g_assert_true (self->early_notified);
+  assert_clean (dev);
+  /* Model fprintd's automatic restart of a non-terminal D-Bus retry. The
+   * restarted operation waits through contact, then completes after lift.
+   */
+  release_after = 6;
+  calibration_frames = 0;
+  g_assert_true (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (match);
+  g_assert_cmpuint (calibration_frames, >=, 10);
+  g_assert_false (self->early_notified);
+  g_assert_true (self->calibration.valid);
+  assert_clean (dev);
+  early_contact = FALSE;
+  release_after = 0;
+  g_assert_true (fp_device_close_sync (dev, NULL, &error));
+}
+
+static gboolean
+cancel_early_wait (gpointer data)
+{
+  if (calibration_frames < 3)
+    return G_SOURCE_CONTINUE;
+  g_cancellable_cancel (data);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+test_cancel_early_contact (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  g_autoptr(GError) error = NULL;
+  wrong_finger = early_contact = FALSE;
+  g_autoptr(FpPrint) print = enroll (dev, NULL, &error);
+  g_assert_no_error (error);
+  memset (&FPI_DEVICE_EGIS0575 (dev)->calibration, 0, sizeof (Eh575Calibration));
+  early_contact = TRUE;
+  release_after = calibration_frames = 0;
+  gboolean match;
+  g_assert_false (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
+  g_assert_error (error, FP_DEVICE_RETRY, FP_DEVICE_RETRY_REMOVE_FINGER);
+  g_clear_error (&error);
+  calibration_frames = 0;
+  g_autoptr(GCancellable) cancel = g_cancellable_new ();
+  g_timeout_add (1, cancel_early_wait, cancel);
+  g_assert_false (fp_device_verify_sync (dev, print, cancel, NULL, NULL, &match, NULL, &error));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+  g_clear_error (&error);
+  assert_clean (dev);
+  early_contact = FALSE;
+  g_assert_true (fp_device_close_sync (dev, NULL, &error));
+}
+
+static void
 test_malformed (void)
 {
   g_autoptr(FpDevice) dev = new_device ();
@@ -255,6 +348,33 @@ test_malformed (void)
       g_assert_cmpuint (submitted, ==, before);
       assert_clean (dev);
     }
+  g_assert_true (fp_device_close_sync (dev, NULL, &error));
+}
+
+static void
+early_progress_cancel (FpDevice *dev, gint stage, FpPrint *print, gpointer data, GError *error)
+{
+  g_assert_error (error, FP_DEVICE_RETRY, FP_DEVICE_RETRY_REMOVE_FINGER);
+  g_assert_cmpint (stage, ==, 0);
+  g_cancellable_cancel (data);
+}
+
+static void
+test_cancel_early_enrollment (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  g_autoptr(GError) error = NULL;
+  g_autoptr(GCancellable) cancel = g_cancellable_new ();
+  g_autoptr(FpPrint) template = fp_print_new (dev);
+  g_object_ref_sink (template);
+  early_contact = TRUE;
+  release_after = calibration_frames = 0;
+  g_autoptr(FpPrint) print = fp_device_enroll_sync (dev, template, cancel, early_progress_cancel, cancel, &error);
+  g_assert_null (print);
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
+  g_clear_error (&error);
+  assert_clean (dev);
+  early_contact = FALSE;
   g_assert_true (fp_device_close_sync (dev, NULL, &error));
 }
 
@@ -340,5 +460,8 @@ main (int argc, char **argv)
   g_test_add_func ("/egis0575-ridge/cancel-enrollment-progress", test_cancel_enroll);
   g_test_add_func ("/egis0575-ridge/malformed-template-no-usb", test_malformed);
   g_test_add_func ("/egis0575-ridge/suspend-worker-resume-reactivate", test_suspend_worker);
+  g_test_add_func ("/egis0575-ridge/early-contact-warm-match-reject-cold-lift", test_early_contact);
+  g_test_add_func ("/egis0575-ridge/cancel-cold-early-contact", test_cancel_early_contact);
+  g_test_add_func ("/egis0575-ridge/cancel-cold-early-enrollment", test_cancel_early_enrollment);
   return g_test_run ();
 }

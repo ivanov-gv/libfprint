@@ -47,10 +47,35 @@ setting first; each trial writes a candidate, discards one settling frame and
 measures three frames. Keep the reader empty. Search the range 0..63 toward
 mean 128 only when the initial mean lies outside 112..144 or clips. Remeasure
 the selected setting; require mean 96..160, frame deviation ≤18 and clipping
-≤0.5%. Excess contrast during calibration fails rather than learning a finger
-as an empty reference. The session background is a per-pixel median of the
+≤0.5%. Excess contrast during cold calibration resets the partial empty burst
+and waits for lift rather than learning a finger as an empty reference. In ridge
+verify mode the first such contact returns REMOVE_FINGER (a retry, not a device
+error); stock fprintd restarts verification on the same D-Bus request. The restarted
+driver suppresses repeated retry reports until calibration completes. Enrollment
+reports a retry progress event and continues; image/capture mode waits for lift.
+The session background is a per-pixel median of the
 three actually measured reference frames. Failed calibration leaves a volatile
 setting until fresh initialization; it does not promise restoration.
+
+The optional `EH575C1` cache stores only a successfully measured empty background,
+DC 0..63, USB bus/address, Linux boot UUID, monotonic timestamp and accumulated
+suspend time (CLOCK_BOOTTIME minus CLOCK_MONOTONIC). Version/reserved bytes,
+background quality, identity, non-future timestamp, one-hour age and suspend delta
+(50 ms tolerance) are checked before use. Initialization and ACK validation still
+run; the cached DC is explicitly written and one settling frame discarded.
+A finger-like next frame can start acquisition using that reference, without
+renewing its timestamp. If an idle frame differs in spatial RMS by more than 4
+or mean by more than 16, discard the candidate and recalibrate. Changing DC during
+search also invalidates it. Transfer/device failures discard the cache.
+
+Memory reuse survives clean operations on one object. Cross-process reuse requires
+`FP_EH575_CALIBRATION_DIR`: an absolute, euid-owned 0700 directory, no final symlink.
+Reads require a regular, single-link, euid-owned 0600 file of exactly 5436 bytes;
+symlinks, FIFOs, invalid/expired data and missing storage fall back to calibration.
+Writes are exclusive-temp-file, fsync and atomic rename; no fingerprint frames or
+templates enter this cache. No directories are guessed/created by the driver.
+The package supplies a separate root-owned directory and narrow ReadWritePaths
+exception; fprintd's StateDirectory and print store are unchanged.
 
 Contact is spatial RMS deviation ≥8 from the measured background after removing
 global brightness shift. Require three empty frames to report finger removal.

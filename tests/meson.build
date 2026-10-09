@@ -1,4 +1,12 @@
 if 'egis0575' in drivers
+  eh575_calibration_test = executable('test-egis0575-calibration',
+    'test-egis0575-calibration.c',
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: [glib_dep, mathlib_dep],
+  )
+  test('egis0575-calibration', eh575_calibration_test,
+    env: ['G_DEBUG=fatal-warnings'],
+    suite: ['drivers', 'egis0575'])
   eh575_protocol_test = executable('test-egis0575-protocol',
     'test-egis0575-protocol.c',
     include_directories: include_directories('../libfprint/drivers'),

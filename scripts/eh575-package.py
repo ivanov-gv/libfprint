@@ -18,9 +18,10 @@ DROPIN = Path("/usr/lib/systemd/system/fprintd.service.d/60-eh575-native.conf")
 MODULES = ("core", "imgproc", "features2d", "calib3d", "video")
 README = """EXPERIMENTAL EH575 GNOME TRIAL -- NOT A CERTIFIED BIOMETRIC MATCHER
 
-This package changes only fprintd's native library selection. It does not replace
+This package changes fprintd's native library selection and enables a protected
+empty-reader calibration cache. It does not replace
 Ubuntu's libfprint package, daemon, D-Bus/PolicyKit policies, or PAM configuration.
-Only the native shared library, licenses/docs and a systemd service drop-in ship.
+Only the native library, licenses/docs, service drop-in and empty cache directory ship.
 No Python matcher, test authorization fixture, template or capture ships.
 
 Install ONLY after private lifecycle tests and explicit approval. Review apt's
@@ -33,6 +34,12 @@ Create a NEW system enrollment with fprintd-enroll -f right-index-finger or GNOM
 Settings. Existing PRIVATE test enrollments are never copied automatically.
 Keep the sensor empty during initial calibration; use 15 stationary touches with
 three each at center/tip/base/left/right, moving only between touches.
+After a successful empty-start scan, a compatible cache permits early touch-and-hold.
+It stores only an empty-sensor reference and DC metadata, not a finger/template,
+in /var/lib/eh575-libfprint/calibration (0700 directory, 0600 files). Boot, physical
+suspend, device changes and one-hour expiry invalidate reuse. Cold early contact
+requests remove-and-retry: lift briefly, then touch again in the same client request.
+Acquisition quality and matching thresholds are unchanged; test the update afresh.
 Test fprintd-verify with enrolled and non-enrolled fingers BEFORE locking.
 
 Rollback: sudo apt remove libfprint-eh575-experimental
@@ -40,6 +47,8 @@ The drop-in and /opt library are removed; fprintd is reloaded/restarted to selec
 Ubuntu's original library again. No GDM restart, reboot or PAM edit is needed.
 Stored system prints are biometric data and are deliberately NOT erased by removal.
 Private test prints and system package libfprint files are never touched.
+Runtime calibration cache files may remain after removal; Ubuntu's library does
+not use them. They are not an enrollment and cannot be used to import a print.
 Do not run apt autoremove blindly; review any optional dependency cleanup.
 
 GNOME/GDM fingerprint use may include both unlock AND login. This package does
@@ -109,11 +118,16 @@ def payload(root, library, repo, revision, version):
     shutil.copyfile(library, target)
     target.chmod(0o644)
     (directory / "libfprint-2.so.2").symlink_to(target.name)
+    # Separate from fprintd's print store: its backend treats top-level entries
+    # as usernames. Do not change StateDirectory or STATE_DIRECTORY.
+    (root / "var/lib/eh575-libfprint/calibration").mkdir(parents=True, mode=0o700)
     write(root, DROPIN, """# Managed by libfprint-eh575-experimental; remove the package to revert.
 [Service]
 Environment="LD_LIBRARY_PATH=/opt/eh575-libfprint/lib"
 Environment="FP_DRIVERS_ALLOWLIST=egis0575"
 Environment="G_MESSAGES_DEBUG="
+Environment="FP_EH575_CALIBRATION_DIR=/var/lib/eh575-libfprint/calibration"
+ReadWritePaths=/var/lib/eh575-libfprint/calibration
 UnsetEnvironment=LD_PRELOAD DBUS_SYSTEM_BUS_ADDRESS DBUS_SESSION_BUS_ADDRESS
 """)
     doc = Path("/usr/share/doc") / PACKAGE
@@ -125,6 +139,7 @@ UnsetEnvironment=LD_PRELOAD DBUS_SYSTEM_BUS_ADDRESS DBUS_SESSION_BUS_ADDRESS
         "library_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
         "template_schema": "eh575-ridge-v1", "security_certified": False,
         "system_pam_modified": False, "biometric_data_included": False,
+        "calibration_cache": "empty-reader-v1; same boot/suspend/device; max age 1 hour",
     }, indent=2) + "\n")
     (root / "DEBIAN").mkdir(mode=0o755)
     write(root, "DEBIAN/control", control(version, "amd64", revision))

@@ -62,10 +62,28 @@ compares their ridge detail. It does not stitch them into a complete fingerprint
 
 ## How acquisition, enrollment and verification work
 
-Each scan session initializes the device, calibrates its volatile exposure setting
-with the reader empty, and measures an empty-reader background. Calibration helps
-control clipping and brightness changes between sessions, reboot and resume.
-Background correction prevents fixed sensor texture from becoming identity evidence.
+Each scan session initializes the device. Fresh calibration sets its volatile
+exposure with the reader empty and measures an empty-reader background. Calibration
+controls clipping and brightness changes; background correction prevents fixed
+sensor texture from becoming identity evidence.
+
+The experimental early-touch update can reuse a previously measured empty-reader
+calibration, restoring its DC setting before capture. The optional protected cache
+is valid only for the same USB bus/address, Linux boot and suspend epoch, for at
+most one hour. With a compatible cache, you can touch immediately and hold still.
+It contains an empty-sensor reference and calibration metadata, not a finger image
+or template. The trial package stores it separately from fprintd's enrolled prints
+in `/var/lib/eh575-libfprint/calibration` (directory 0700, files 0600).
+Private fprintd tests use their own `calibration` directory. Without the explicitly
+configured `FP_EH575_CALIBRATION_DIR`, reuse is in memory only.
+
+On first use, after reboot/resume, or when the cache is unavailable/expired, a brief
+empty-reader measurement is still necessary. Touching early now requests
+`verify-remove-and-retry` rather than immediately failing calibration. Stock
+fprintd automatically restarts the retry while keeping its D-Bus verification
+request active: lift briefly, then touch again. The restarted scan waits for lift
+within a bounded 30-second calibration deadline. This acquisition change has
+synthetic coverage; fresh GNOME/real-reader testing is still required.
 
 After detecting a finger, capture allows 250 ms for contact to settle. Frames must
 pass contrast/clipping and stationary-contact checks; movement restarts the burst
@@ -354,9 +372,12 @@ is not changed by this package.
 
 ## Known limitations and troubleshooting
 
-- **Reader must be empty during calibration.** In hardware/private tests, wait
-  for `Reader calibrated`. Touching early can cause `verify-unknown-error`, not a
-  completed comparison. Stock GNOME/CLI may not expose the calibration prompt.
+- **Cold calibration still needs a brief lift.** A valid cache allows immediate
+  contact. Without one (including after reboot/resume), early contact produces a
+  recoverable remove-and-retry request. Lift briefly and touch again; leaving the
+  reader covered until the deadline can still end the attempt. GNOME's own PAM
+  timeout may be shorter. This is not yet a promise of touch-and-wait after every
+  hardware reset. Other USB/exposure errors still need diagnosis.
 - **Small placement changes still need overlapping detail.** Keep the finger
   flat and covering the strip. Partial/poor contact can produce retries. A retry
   named `swipe-too-short` by the generic fprintd API does not mean this press

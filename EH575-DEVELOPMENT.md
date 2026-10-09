@@ -14,6 +14,16 @@ the original upstream baseline. The GitHub `origin` is the development fork;
 
 ## Current status
 
+The early-touch development update reuses a bounded empty-reader calibration
+cache and replaces fatal finger-present calibration with lift/retry recovery.
+The cache is bound to boot, suspend epoch and USB enumeration and expires after
+one hour; real cold starts still need a brief empty measurement. It does not
+change matching thresholds, template schema, settling or burst requirements.
+The package provides optional root-owned cache storage separate from fprintd's
+prints; private sessions have their own cache. See the protocol note for file
+guards and README for the user workflow. Synthetic warm/cold contact, wrong-finger,
+cancellation and cache-guard tests do not establish real-reader reliability.
+
 Native discovery, claim/release, initialization, idle exposure calibration,
 cancellation and real image capture have worked. The reported capture was
 206×104 pixels with **only two minutiae**. That is not evidence of usable

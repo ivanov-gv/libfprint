@@ -444,6 +444,7 @@ def main():
 
 
 def run(args, command, state, prints, library, libraries, daemon):
+    calibration = private_directory(state / "calibration")
     bus = PrivateBus()
     fixture = None
     process = None
@@ -453,7 +454,7 @@ def run(args, command, state, prints, library, libraries, daemon):
         fixture = Fixtures(bus, args.forward_sleep)
         env = client_env(bus.address)
         daemon_env = dict(env, LD_LIBRARY_PATH=libraries, FP_DRIVERS_ALLOWLIST="egis0575",
-                          STATE_DIRECTORY=str(prints))
+                          STATE_DIRECTORY=str(prints), FP_EH575_CALIBRATION_DIR=str(calibration))
         print("REAL fprintd on a fresh private bus. Templates: " + str(prints), flush=True)
         print("Test-only authorization. GNOME/PAM/system fprintd remain unchanged.", flush=True)
         process = subprocess.Popen([str(daemon), "--no-timeout"], env=daemon_env)
