@@ -1,56 +1,4 @@
 if 'egis0575' in drivers
-  touch_test = executable('test-egis0575-touch',
-    'test-egis0575-touch.c',
-    include_directories: include_directories('../libfprint/drivers'),
-    dependencies: [glib_dep, mathlib_dep])
-  test('egis0575-touch', touch_test,
-    env: ['G_DEBUG=fatal-warnings'],
-    suite: ['drivers', 'egis0575'])
-  detector_test = executable('test-egis0575-detector',
-    'test-egis0575-detector.c',
-    include_directories: include_directories('../libfprint/drivers'),
-    dependencies: [glib_dep, mathlib_dep])
-  test('egis0575-detector', detector_test,
-    env: ['G_DEBUG=fatal-warnings'],
-    suite: ['drivers', 'egis0575'])
-  executable('eh575-touch-probe', 'eh575-touch-probe.c',
-    include_directories: include_directories('../libfprint/drivers'),
-    dependencies: [gusb_dep, mathlib_dep],
-    install: false)
-  executable('eh575-sleep-worker', 'eh575-sleep-worker.c',
-    include_directories: include_directories('../libfprint/drivers'),
-    dependencies: [gusb_dep, mathlib_dep],
-    install: false)
-  sleep_test = executable('test-egis0575-sleep', 'test-egis0575-sleep.c',
-    include_directories: include_directories('../libfprint/drivers'),
-    dependencies: [gusb_dep, mathlib_dep])
-  test('egis0575-sleep', sleep_test,
-    env: ['G_DEBUG=fatal-warnings'],
-    suite: ['drivers', 'egis0575'])
-  test('egis0575-sleep-supervisor', python3,
-    args: [files('test-egis0575-sleep.py')],
-    suite: ['drivers', 'egis0575'])
-  test('egis0575-sleep-package', python3,
-    args: [files('test-egis0575-sleep-package.py')],
-    suite: ['drivers', 'egis0575'])
-  contact_test = executable('test-egis0575-contact', 'test-egis0575-contact.c',
-    include_directories: include_directories('../libfprint/drivers'),
-    dependencies: [gusb_dep, mathlib_dep])
-  test('egis0575-contact', contact_test,
-    env: ['G_DEBUG=fatal-warnings'],
-    suite: ['drivers', 'egis0575'])
-  test('egis0575-touch-runner', python3,
-    args: [files('test-egis0575-touch-runner.py')],
-    suite: ['drivers', 'egis0575'])
-  gjs = find_program('gjs', required: false)
-  if gjs.found()
-    test('egis0575-wake-controller', gjs,
-      args: ['-m', files('test-egis0575-wake-controller.mjs')],
-      suite: ['drivers', 'egis0575'])
-  endif
-  test('egis0575-driver-report', python3,
-    args: [files('test-egis0575-driver-report.py')],
-    suite: ['drivers', 'egis0575'])
   eh575_calibration_test = executable('test-egis0575-calibration',
     'test-egis0575-calibration.c',
     include_directories: include_directories('../libfprint/drivers'),
@@ -102,9 +50,6 @@ if get_option('egis0575_ridge')
     suite: ['drivers', 'egis0575'])
   test('egis0575-package', python3,
     args: [files('test-egis0575-package.py')],
-    suite: ['drivers', 'egis0575'])
-  test('egis0575-wakeup', python3,
-    args: [files('test-egis0575-wakeup.py')],
     suite: ['drivers', 'egis0575'])
   if run_command(python3, '-c', 'from gi.repository import Gio, GLib', check: false).returncode() == 0 and find_program('dbus-daemon', required: false).found()
     test('egis0575-fprintd-session', python3,

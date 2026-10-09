@@ -350,10 +350,8 @@ access available. Only after deliberately approving the authentication change:
 sudo apt-get --no-remove install /absolute/path/to/reviewed-package.deb
 ```
 
-Installation reloads systemd and tries to restart fprintd and an already-active
-optional EH575 wake service, not GDM. The wake service is never enabled or started
-by a first installation. The package contains the native library, service drop-in,
-documentation/metadata and an opt-in USB wake helper/service/sleep hook;
+Installation reloads systemd and tries to restart **fprintd only**, not GDM. The
+package contains the native library, service drop-in and documentation/metadata;
 no personal prints, captures, Python matcher or test authorization fixtures ship.
 
 Create a **fresh system enrollment** from a normal terminal, outside the private
@@ -376,74 +374,6 @@ wrong-finger match is a reason to stop and investigate, not lower thresholds.
 The package does not automatically enable unrelated PAM services or guarantee
 GNOME's fingerprint policy on another machine.
 
-### Optional touch-to-wake trial
-
-Linux-only research for both suspended wake and a blanked lock screen is described
-in [EH575-TOUCH-RESEARCH.md](EH575-TOUCH-RESEARCH.md). The new isolated native probe
-can check interrupt activity with no new register commands and test awake contact
-detection using the characterized image protocol. It is not a background service
-and is not included in the deployment package. No GNOME/authentication hooks are
-installed by these probes. Both cases remain incomplete until actual touch events
-and safe ownership handoff are established; USB permission alone is not enough.
-
-Waking from suspend is separate from fingerprint matching. On the development
-laptop, the EH575 advertises USB remote wake but its own and its root hub's wake
-permissions were disabled; the PCI controller and platform wake permissions were
-already enabled. This is promising, not proof that touch generates a wake event.
-Subsequent measured-detector experiments established touch wake on this laptop
-while a USB handle is retained, including after releasing the interface claim.
-Normal fprintd verification matched after restoration. Closing the handle before
-sleep failed in a longer trial; the precise cause and long-term reliability remain
-under investigation. The permission helper alone does not arm this detector.
-
-The package includes a **disabled-by-default** permission trial. Read status, then
-start it temporarily with another wake method and password access available:
-
-```sh
-/usr/libexec/eh575-wakeup status
-sudo systemctl start eh575-wakeup.service
-```
-
-Lock and suspend through the normal desktop action. Once the machine is asleep,
-touch and hold your enrolled finger. The intended sequence is touch wakes the
-laptop, GNOME starts its normal fingerprint verification, and the held finger
-unlocks. Actual sensor wake and GNOME timing must be tested on hardware; an enabled
-sysfs flag is not a passing test. A non-enrolled finger may wake the laptop, but
-must NOT unlock it. Recheck password fallback and several suspend cycles.
-
-Only if those trials pass, persist the opt-in at boot:
-
-```sh
-sudo systemctl enable eh575-wakeup.service
-```
-
-The helper validates `1c7a:0575` revision `1072`, derives that reader's current USB
-hub ancestry, and changes only those `power/wakeup` attributes. It does not enable
-other USB devices, PCI/platform wake, disable sleep, poll while suspended, or alter
-PAM/GNOME/matching/calibration. Enabling the shared hub can let other devices on
-that hub wake the laptop too. A pre-sleep hook reapplies permission after
-libfprint's normal probe/resume wake-policy resets, only while opted in. Root-owned
-0700 `/run/eh575-wakeup` stores a 0600 rollback journal; stopping restores the
-original values on validated current paths. Failures are reported, not treated as
-successful wake support. A moved/missing reader can prevent full restoration;
-reboot clears the transient settings, and disabling prevents boot reapplication.
-
-Disable and restore wake settings without removing fingerprint support:
-
-```sh
-sudo systemctl disable --now eh575-wakeup.service
-```
-
-The new **separate** `eh575-touch-wake-experimental` add-on uses the characterized
-measured detector to arm before ordinary suspend, retain an unclaimed USB handle,
-and restore/release it in the post-resume hook before normal GNOME authentication.
-It ships disabled, changes no matcher/PAM/GNOME/templates, and has software tests
-but still needs physical automatic-cycle and password-fallback validation. See
-[the add-on trial, build and rollback](EH575-TOUCH-RESEARCH.md#automatic-suspend-add-on-opt-in-physical-trial).
-Awake blank-screen wake is still a separate development target. Do not treat this
-prototype or enabled sysfs permission as fully verified automatic wake support.
-This trial is for suspend, not a promise of power-on or hibernation wake.
-
 ### Rollback
 
 ```sh
@@ -451,12 +381,132 @@ sudo apt remove libfprint-eh575-experimental
 ```
 
 Removal deletes the package-owned override and library, reloads systemd and
-stops/disables the optional wake trial and restores its recorded settings, then
 tries to restart fprintd so it uses the distribution library again. It does not
 erase private test data or system fingerprint enrollments. Stored prints are
 deliberately preserved; remove them separately through the appropriate fingerprint
 service only if you intend to delete that biometric data. Password configuration
 is not changed by this package.
+
+## Archived touch-to-wake experiments (stopped 9 October 2026)
+
+**Decision: retain fingerprint login/unlock, but wake the laptop with a keyboard
+key or power button.** Touch-to-wake was investigated separately from recognition
+and proved unreliable in the automatic trial. At the owner's request, the wake
+helpers, detector probes, handoff prototype, add-on packaging and associated tests
+were removed from the current source. The fingerprint-only implementation was
+restored to the code at `f9de2e96bc8b`: stationary acquisition, native ridge
+matching, performance improvements, persistent calibration and suspend cleanup
+are retained. Matching thresholds and enrolled prints were not changed.
+
+The following records the experiments, including failures, rather than offering
+instructions to enable wake support. All physical results below concern the one
+revision-`1072` Acer reader on 9 October 2026. A contact event could wake a machine,
+but was never treated as authorization to unlock it.
+
+### Experiments and observed results
+
+| Experiment | Method | Result |
+| --- | --- | --- |
+| Discovery/open-only probe | Checked descriptors, exclusive interface claim, release and close, without capture or detector commands. | Passed on the real reader. This established USB access, not wake capability. |
+| USB wake permission only | An opt-in helper enabled the reader's and USB hub ancestors' `power/wakeup` attributes, preserving their original settings. PCI/platform policy was not changed. | Touch did not wake the laptop in explicit real-suspend trials. The first observed post-resume reader flag was disabled; permission alone was insufficient. |
+| Permission reapplication and sleep logging | A pre-sleep hook reapplied permission after fprintd quiesced; pre/post snapshots logged power metadata and wake counters. | Subsequent real s2idle tests still failed to wake by touch, including the logged 14:18 cycle. An enabled attribute was not evidence that the sensor itself was armed. |
+| Awake interrupt endpoints | Listened on `0x83` and `0x84` for six seconds each with the sensor empty, touched and released, both before and after the characterized 47-command capture initialization. | Both endpoints reported **zero packets and zero payload changes in every phase**. No usable touch interrupt was demonstrated. |
+| Awake image-based contact detection | Used known capture commands and quality-gated frames; required repeated contact and empty observations. | Both CONTACT and RELEASE were detected. Host image polling works while awake, but cannot execute while the host is suspended and does not establish hardware wake. |
+| Windows-driver/static trace investigation | Read an Acer OEM driver and pinned public research as data, and cross-checked the 5-series volatile detector entry/exit against four published USB traces. | Identified a separate detector calibration/arming path. This supplied an experimental lead, not proof of Windows suspend behavior or a complete Linux wake implementation. No vendor binary was executed or shipped. |
+| Awake measured low-power detector | Measured this reader's detector settings rather than replaying another device's values; polled register `0x01` and observed both interrupt endpoints. | Reference 3, DC 11/20, mean 100, threshold 180. Touch changed status from `0x00` to `0x04`; it remained latched after lift. Interrupt endpoints stayed silent. Capture restoration succeeded and normal fprintd verification subsequently matched. |
+| Manual suspend, claim and handle retained | Armed the measured detector, retained the exclusive USB claim and open handle, and stopped USB traffic until resume. | Owner confirmed **wake by touch** in one short trial, approximately 3.29 seconds asleep. Reference 3, DC 11/20, mean 107, threshold 187. Restoration and subsequent normal verification succeeded. |
+| Manual suspend, claim released and handle closed | Armed the detector, released the interface and closed the USB handle before sleep; attempted reopen/reclaim and restoration afterward. | Touch **did not wake** it. Keyboard wake was needed after approximately 20.61 seconds. Restoration reported an unexpected-status/busy timeout, but subsequent normal fprintd verification matched. Idle mean 115.5, texture 14.3, capture DC 34; detector reference 3, DC 11/22, mean 109, threshold 189. |
+| Manual suspend, claim released but handle kept open | Separated interface ownership from handle lifetime; kept the handle without USB I/O and reclaimed only for restoration. | Owner confirmed **wake by touch** in one approximately 2.48-second trial. Idle mean 115.2, texture 14.4, capture DC 32; detector reference 3, DC 11/20, mean 103, threshold 183. Restoration and subsequent normal verification matched. Immediate repeat attempts correctly refused to run while fprintd was active; those were safety refusals, not failed sleep trials. |
+| Awake contact/handoff groundwork | Added a bounded one-shot detector-contact probe and a GJS handoff-policy prototype. Notification required restoration, release/close and successful child exit before ordinary authentication could start. | Synthetic notification/cancellation/ownership tests passed. No live GNOME extension or automatic blank-screen touch wake was installed or physically validated. Contact was not a match or an unlock shortcut. |
+| Automatic suspend add-on | A separate disabled-by-default service armed a native worker in a system-sleep PRE hook, released the claim but retained the handle, then restored capture and reaped the worker in POST. | The owner installed `eh575-touch-wake-experimental_0.1+git.2106.f30a0a417811` and started it at 19:25 CEST. **Touch worked immediately after sleep, but failed after waiting 5–10 seconds. Some cycles resumed immediately without any sensor interaction.** The automatic implementation was therefore rejected as unreliable. |
+
+The permission-only tests included real s2idle cycles at 13:53:13–13:53:57 and
+13:54:27–13:54:53 CEST. One resume disconnected/re-enumerated the reader.
+The held-claim success was also supported by the 15:19:20–15:19:24 suspend
+snapshots: wake permission was enabled, wake-active counts increased and the
+last IRQ changed from 7 to 9. Those counters, IRQs and clock intervals do **not**
+independently identify the wake source; the owner's physical observation is the
+basis for labeling that trial a touch-wake success.
+
+The closed-handle failure versus open-handle successes suggested a possible USB
+runtime-power interaction. It did not prove a root cause: the trials had different
+sleep durations and measured detector settings. In particular, two short manual
+successes did not establish reliable wake after longer sleep.
+
+### Static research and calibration findings
+
+The inspected OEM package was Acer's **Fingerprint EGISTEC 3.7.1.1**
+(`EgisTouchFP0575.inf` DriverVer `06/15/2020,3.7.1.1`), not a verified copy of
+the version previously installed by the owner. Its INF targets `1c7a:0575`,
+enables idle with a 10000 ms default timeout and sets a remote-wake preference.
+Those settings alone do not establish the runtime policy or actual wake path.
+
+SHA-256 identities for reproducing the historical inspection:
+
+- OEM ZIP: `9de04ccb27244583a2788987860baa6dc331cc329ec73c33fb71a0b143d1459e`.
+- `EgisTouchFP0575.dll`: `25704878eb4b15b41bf9389d2af0c6e44e830ad9c890f4fef2e710110c7b2631`.
+
+The public research/trace baseline was
+[Animeshz/EgisTec-EH575 at 57fa58a2](https://github.com/Animeshz/EgisTec-EH575/tree/57fa58a2b39a67869645dbaad4f3d12a6a67ec99).
+Older generic detector paths and reconstructed vtable indices were not assumed
+to describe the OEM 5-series device. Static function/call-range inspection and
+all four `575-0` through `575-3` traces supported a separate volatile detector
+bank, descending-write ordering, mode exit and capture restoration. The traces
+did not contain a verified physical suspend-and-touch-wake event.
+
+Detector calibration used different analogue settings from image exposure,
+including bank `0x34`/`0x35`, measured statistics and a threshold derived from
+the mean plus the OEM margin of 80. Other trace values were not imported as
+defaults for this reader. The existing `EH575C2` cache is an **image acquisition**
+profile, not a wake-detector profile. No firmware upload, nonvolatile write,
+kernel-driver detachment, USB reset or authentication-threshold relaxation was
+used in these experiments.
+
+### Automatic-trial logs and evidence limits
+
+The final automatic trial's journal showed successful arming/restoration in
+several cycles, but also one pre-arm failure. Detector measurements varied:
+some runs reported means 107 or 113 (thresholds 187 or 193), while others reported
+means 4, 5 or 0 (thresholds 84, 85 or 80). Several cycles returned within the same
+second or approximately one second of suspend. This records suspicious
+measurements and rapid resumes; it does **not** establish their cause or prove
+which event woke the system. A longer logged cycle also occurred, but its elapsed
+time does not turn the owner's failed delayed-touch tests into successes.
+
+The automatic design retained no reader handle at normal awake idle. It required
+sleep preparation, refused competing claims, sent no USB traffic while asleep,
+and waited for restoration and actual worker exit before POST completed.
+Root-only bounded control messages, private runtime permissions, cancellation
+cleanup and reaping after missing/cancelled POST hooks were tested. Selected
+protocol/detector/contact/runner/packaging/lifecycle suites, synthetic subprocess
+tests, GJS handoff-policy tests and selected sanitizer tests passed during
+development. They tested software behavior, **not** long-sleep wake reliability,
+battery impact, real GNOME handoff or biometric security. No successful normal
+verification after the final automatic trial was explicitly reported.
+
+### Rollback and historical source
+
+The owner stopped/disabled both experimental services and removed only
+`eh575-touch-wake-experimental`. The working
+`libfprint-eh575-experimental` library, fprintd/PAM configuration, protected
+calibration cache and enrolled prints were retained. The stopped permission
+service restores its journaled USB wake settings. Older installed matcher
+packages may still contain the **disabled** permission helper/hook; these do not
+arm the detector, and the restored package builder no longer ships them.
+
+The current checkout contains no wake detector/service/probe implementation.
+Detailed research notes and removed tools remain recoverable in Git history:
+permission trial `a8980899`, measured detector `9edb1428`, manual suspend
+`0d8eddb8`, closed-handle experiment `a920a0ca`, open-handle isolation
+`d2b9728f`, handoff groundwork `a2149576`/`fbaca4a4`, confirmed
+open-handle result `c0567937`, and automatic add-on
+`9265a28b` through `f30a0a41`. The complete pre-rollback notes are available
+with `git show f30a0a41:EH575-TOUCH-RESEARCH.md` and
+`git show f30a0a41:doc/egis0575-wake-research.md`.
+
+**Wake development is stopped.** Keyboard/power-button wake followed by normal
+fingerprint login/unlock is the retained behavior. This is not a promise of
+touch-only wake, hibernation wake or powered-off wake.
 
 ## Known limitations and troubleshooting
 

@@ -15,17 +15,13 @@ import tempfile
 PACKAGE = "libfprint-eh575-experimental"
 PREFIX = Path("/opt/eh575-libfprint")
 DROPIN = Path("/usr/lib/systemd/system/fprintd.service.d/60-eh575-native.conf")
-WAKE_HELPER = Path("/usr/libexec/eh575-wakeup")
-WAKE_SERVICE = Path("/usr/lib/systemd/system/eh575-wakeup.service")
-WAKE_HOOK = Path("/usr/lib/systemd/system-sleep/eh575-wakeup")
 MODULES = ("core", "imgproc", "features2d", "calib3d", "video")
 README = """EXPERIMENTAL EH575 GNOME TRIAL -- NOT A CERTIFIED BIOMETRIC MATCHER
 
 This package changes fprintd's native library selection and enables a protected
 empty-reader calibration cache. It does not replace
 Ubuntu's libfprint package, daemon, D-Bus/PolicyKit policies, or PAM configuration.
-The native library, licenses/docs, service drop-in, empty cache directory and
-disabled-by-default USB wake helper/service/sleep hook ship.
+Only the native library, licenses/docs, service drop-in and empty cache directory ship.
 No Python matcher, test authorization fixture, template or capture ships.
 
 Install ONLY after private lifecycle tests and explicit approval. Review apt's
@@ -48,24 +44,6 @@ Missing/invalid-profile early contact
 requests remove-and-retry: lift briefly, then touch again in the same client request.
 Acquisition quality and matching thresholds are unchanged; test the update afresh.
 Test fprintd-verify with enrolled and non-enrolled fingers BEFORE locking.
-
-Optional USB wake trial (not proof of sensor wake-on-touch):
-  /usr/libexec/eh575-wakeup status
-  sudo systemctl start eh575-wakeup.service
-Lock, suspend normally, wait for sleep, then touch and hold. Have another wake
-method and password available. Any finger may WAKE; only a verified enrolled
-finger may UNLOCK. If it works reliably, enable it at boot:
-  sudo systemctl enable eh575-wakeup.service
-Rollback wake only: sudo systemctl disable --now eh575-wakeup.service
-This enables USB wake only on revision 1072 and its hub path, never PCI/platform
-wake policy. Other devices on the same hub may become able to wake the laptop.
-The sleep hook reapplies permission after libfprint's normal policy resets.
-While opted in, it logs pre/post sleep power metadata in systemd-suspend.service's
-journal. Post only observes; it never rearms. No serials, images or USB data logged.
-Original values are journaled privately in /run and restored when stopped;
-reboot clears transient policy. No undocumented sensor commands are sent.
-If touching does not wake, sensor-side wake arming is still unimplemented:
-do not treat an enabled sysfs permission as completed wake support.
 
 Rollback: sudo apt remove libfprint-eh575-experimental
 The drop-in and /opt library are removed; fprintd is reloaded/restarted to select
@@ -118,7 +96,7 @@ Architecture: {architecture}
 Maintainer: EH575 experimental contributors <ivanov-gv@users.noreply.github.com>
 Section: admin
 Priority: optional
-Depends: python3, fprintd (>= 1.94.5), libpam-fprintd, libglib2.0-0t64 (>= 2.88.0), libgusb2a (>= 0.4.9), libc6 (>= 2.42), libstdc++6 (>= 15), libopencv-core410, libopencv-imgproc410, libopencv-features2d410, libopencv-calib3d410, libopencv-video410
+Depends: fprintd (>= 1.94.5), libpam-fprintd, libglib2.0-0t64 (>= 2.88.0), libgusb2a (>= 0.4.9), libc6 (>= 2.42), libstdc++6 (>= 15), libopencv-core410, libopencv-imgproc410, libopencv-features2d410, libopencv-calib3d410, libopencv-video410
 Homepage: https://github.com/ivanov-gv/libfprint
 Description: EXPERIMENTAL stationary EH575 native fprintd trial
  Root-owned service-scoped libfprint override for Ubuntu 26.04 amd64.
@@ -155,38 +133,6 @@ Environment="FP_EH575_CALIBRATION_DIR=/var/lib/eh575-libfprint/calibration"
 ReadWritePaths=/var/lib/eh575-libfprint/calibration
 UnsetEnvironment=LD_PRELOAD DBUS_SYSTEM_BUS_ADDRESS DBUS_SESSION_BUS_ADDRESS
 """)
-    write(root, WAKE_HELPER, (repo / "scripts/eh575-wakeup.py").read_text(), True)
-    write(root, WAKE_SERVICE, """# Opt-in only; never enabled by package installation.
-[Unit]
-Description=Experimental EH575 USB wake permission
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-RuntimeDirectory=eh575-wakeup
-RuntimeDirectoryMode=0700
-RuntimeDirectoryPreserve=yes
-ExecStart=/usr/libexec/eh575-wakeup enable
-ExecStop=/usr/libexec/eh575-wakeup disable
-TimeoutStartSec=15
-TimeoutStopSec=15
-ProtectHome=yes
-PrivateTmp=yes
-NoNewPrivileges=yes
-
-[Install]
-WantedBy=multi-user.target
-""")
-    write(root, WAKE_HOOK, """#!/bin/sh
-# fprintd quiesces through logind before systemd's pre-sleep hooks run.
-# No snapshot means no opt-in. A hook failure is logged, not a sleep inhibitor.
-# Log verified pre-sleep permission and read-only post-resume metadata.
-if [ "$1" = pre ] && [ -f /run/eh575-wakeup/state.json ]; then
-    /usr/libexec/eh575-wakeup sleep-pre
-elif [ "$1" = post ] && [ -f /run/eh575-wakeup/state.json ]; then
-    /usr/libexec/eh575-wakeup sleep-post
-fi
-""", True)
     doc = Path("/usr/share/doc") / PACKAGE
     write(root, doc / "README", README)
     write(root, doc / "copyright", (repo / "COPYING").read_text() + "\n\n" +
@@ -197,7 +143,6 @@ fi
         "template_schema": "eh575-ridge-v1", "security_certified": False,
         "system_pam_modified": False, "biometric_data_included": False,
         "calibration_cache": "empty-reader-v2; physical USB port/revision; quality-based recovery; no epoch/age expiry",
-        "usb_wake": "opt-in permission trial; EH575 revision 1072 and USB hub path only; no sensor-side arming",
     }, indent=2) + "\n")
     (root / "DEBIAN").mkdir(mode=0o755)
     write(root, "DEBIAN/control", control(version, "amd64", revision))
@@ -209,14 +154,6 @@ unset DBUS_SYSTEM_BUS_ADDRESS DBUS_SESSION_BUS_ADDRESS LD_LIBRARY_PATH LD_PRELOA
 if [ "$1" = configure ]; then
     /usr/bin/systemctl daemon-reload
     /usr/bin/systemctl try-restart fprintd.service
-    /usr/bin/systemctl try-restart eh575-wakeup.service
-fi
-""", True)
-    write(root, "DEBIAN/prerm", """#!/bin/sh
-set -eu
-unset DBUS_SYSTEM_BUS_ADDRESS DBUS_SESSION_BUS_ADDRESS LD_LIBRARY_PATH LD_PRELOAD
-if [ "$1" = remove ]; then
-    /usr/bin/systemctl disable --now eh575-wakeup.service
 fi
 """, True)
     write(root, "DEBIAN/postrm", """#!/bin/sh

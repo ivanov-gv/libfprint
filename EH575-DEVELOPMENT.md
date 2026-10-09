@@ -14,30 +14,6 @@ the original upstream baseline. The GitHub `origin` is the development fork;
 
 ## Current status
 
-The next Linux-only increment adds a non-installed GUsb diagnostic for interrupt
-endpoints 83/84 before/after characterized initialization, and awake contact/release
-detection using the same strict framing and quality gates as acquisition. It
-never authenticates, stores an image/template, detaches a kernel driver, resets
-USB or tries undocumented writes. The runner refuses active system fprintd and
-the USB claim remains exclusive. Synthetic classifier/runner tests are not proof
-of sensor interrupts, suspend wake, or safe GNOME integration. A physical touch
-trial was completed on 2026-10-09: both interrupt modes were silent, while image
-polling detected contact and release. This does not prove low-power hardware wake
-or safe unattended ownership with system fprintd; see EH575-TOUCH-RESEARCH.md.
-
-An opt-in USB remote-wake permission trial now accompanies the deployment package.
-It is not a driver protocol change: the root helper validates the tested revision,
-enables only the reader and its USB hub ancestors, journals rollback state in
-protected `/run`, and reapplies permission in a pre-sleep hook after fprintd's
-logind suspend cleanup. Installation does not enable it. Synthetic tests cover
-target selection, original-policy preservation, failed-write rollback, unsafe
-state guards and opt-in behavior. Two controlled real-suspend trials on 2026-10-09
-failed to wake on touch. The update logs opt-in pre/post sleep metadata, verifying
-USB permission after reapply without re-enabling it on resume. Sensor-side arming
-is still unimplemented; public static-analysis leads are recorded in
-doc/egis0575-wake-research.md. GNOME timing and battery impact remain untested.
-See README and the GNOME trial guide for temporary enable/disable commands.
-
 The persistent-profile development update reuses measured empty-reader calibration
 across boot/resume, bound to hardware revision and the physical USB port identifier,
 with no time-based expiry. It replaces fatal finger-present calibration with

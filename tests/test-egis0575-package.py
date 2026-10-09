@@ -47,8 +47,6 @@ class PackagePolicy(unittest.TestCase):
             (repo / "libfprint/drivers").mkdir(parents=True)
             (repo / "COPYING").write_text("synthetic LGPL test fixture")
             (repo / "libfprint/drivers/egis0575-prototype-MIT.txt").write_text("synthetic MIT test fixture")
-            (repo / "scripts").mkdir()
-            (repo / "scripts/eh575-wakeup.py").write_text("#!/usr/bin/python3 -I\n# synthetic helper fixture\n")
             library = root / "library"
             library.write_bytes(b"synthetic ELF fixture, not biometric")
             payload = root / "payload"
@@ -59,13 +57,10 @@ class PackagePolicy(unittest.TestCase):
                 "opt/eh575-libfprint/lib/libfprint-2.so.2.0.0",
                 "opt/eh575-libfprint/lib/libfprint-2.so.2",
                 "usr/lib/systemd/system/fprintd.service.d/60-eh575-native.conf",
-                "usr/libexec/eh575-wakeup",
-                "usr/lib/systemd/system/eh575-wakeup.service",
-                "usr/lib/systemd/system-sleep/eh575-wakeup",
                 "usr/share/doc/libfprint-eh575-experimental/README",
                 "usr/share/doc/libfprint-eh575-experimental/copyright",
                 "usr/share/doc/libfprint-eh575-experimental/build.json",
-                "DEBIAN/control", "DEBIAN/postinst", "DEBIAN/prerm", "DEBIAN/postrm",
+                "DEBIAN/control", "DEBIAN/postinst", "DEBIAN/postrm",
             })
             dropin = (payload / package.DROPIN.relative_to("/")).read_text()
             self.assertIn("/opt/eh575-libfprint/lib", dropin)
@@ -77,19 +72,6 @@ class PackagePolicy(unittest.TestCase):
             cache = payload / "var/lib/eh575-libfprint/calibration"
             self.assertEqual(cache.stat().st_mode & 0o777, 0o700)
             self.assertEqual(list(cache.iterdir()), [])
-            service = (payload / package.WAKE_SERVICE.relative_to("/")).read_text()
-            self.assertIn("ExecStop=/usr/libexec/eh575-wakeup disable", service)
-            self.assertIn("RuntimeDirectoryMode=0700", service)
-            hook = (payload / package.WAKE_HOOK.relative_to("/")).read_text()
-            self.assertIn('[ "$1" = pre ]', hook)
-            self.assertIn('/run/eh575-wakeup/state.json', hook)
-            self.assertIn('eh575-wakeup sleep-pre', hook)
-            self.assertIn('eh575-wakeup sleep-post', hook)
-            self.assertIn('[ "$1" = post ]', hook)
-            self.assertNotIn("systemctl enable", (payload / "DEBIAN/postinst").read_text())
-            self.assertIn("disable --now eh575-wakeup.service", (payload / "DEBIAN/prerm").read_text())
-            for path in (package.WAKE_HELPER, package.WAKE_HOOK):
-                self.assertEqual((payload / path.relative_to("/")).stat().st_mode & 0o777, 0o755)
             for script in ("postinst", "postrm"):
                 text = (payload / "DEBIAN" / script).read_text()
                 self.assertNotIn("pam-auth-update", text)
