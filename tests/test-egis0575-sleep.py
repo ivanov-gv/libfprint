@@ -139,6 +139,58 @@ class SupervisorTests(unittest.TestCase):
         with first, second:
             self.assertEqual(module.root_peer(first), os.getuid() == 0)
 
+    def recovery_supervisor(self):
+        workers, logs = [], []
+        def factory():
+            worker = module.Worker((sys.executable, "-u", "-c",
+                "import sys; print(" + repr(module.ARMED.decode()) + ", flush=True); " +
+                "command = sys.stdin.readline(); " +
+                "print(" + repr(module.RESTORED.decode()) + ", flush=True) if command == 'RESTORE\\n' else None; " +
+                "sys.exit(0 if command == 'RESTORE\\n' else 4)"), log=lambda *a, **kw: None)
+            workers.append(worker)
+            return worker
+        supervisor = module.SleepSupervisor(factory=factory, log=lambda line, **kw: logs.append(line))
+        self.addCleanup(supervisor.cleanup)
+        return supervisor, workers, logs
+
+    def test_idle_reap_after_lost_post_and_fresh_next_cycle(self):
+        supervisor, workers, logs = self.recovery_supervisor()
+        self.assertEqual(supervisor.command("PRE suspend"), "OK armed")
+        self.assertFalse(supervisor.reap_finished())
+        self.assertIs(supervisor.worker, workers[0])
+        workers[0].process.stdin.write(b"CANCELLED\n")
+        workers[0].process.wait(timeout=1)
+        self.assertTrue(supervisor.reap_finished())
+        self.assertIsNone(supervisor.worker)
+        self.assertTrue(workers[0].process.stdout.closed)
+        self.assertTrue(workers[0].process.stdin.closed)
+        self.assertIn("recovery NOT confirmed", logs[0])
+        self.assertFalse(supervisor.reap_finished())
+        self.assertEqual(supervisor.command("PRE suspend"), "OK armed")
+        self.assertEqual(len(workers), 2)
+        self.assertEqual(supervisor.command("POST suspend"), "OK restored")
+
+    def test_pre_reaps_dead_child_but_never_a_live_one(self):
+        supervisor, workers, logs = self.recovery_supervisor()
+        self.assertEqual(supervisor.command("PRE suspend"), "OK armed")
+        self.assertTrue(supervisor.command("PRE suspend").startswith("ERROR"))
+        self.assertEqual(len(workers), 1)
+        workers[0].process.stdin.write(b"CANCELLED\n")
+        workers[0].process.wait(timeout=1)
+        self.assertEqual(supervisor.command("PRE suspend"), "OK armed")
+        self.assertEqual(len(workers), 2)
+        self.assertIn("recovery NOT confirmed", logs[0])
+        self.assertEqual(supervisor.command("POST suspend"), "OK restored")
+
+    def test_reap_does_not_invent_or_discard_unknown_exit(self):
+        supervisor = module.SleepSupervisor()
+        self.assertFalse(supervisor.reap_finished())
+        class Unknown:
+            process = None
+        supervisor.worker = Unknown()
+        self.assertFalse(supervisor.reap_finished())
+        self.assertIsNotNone(supervisor.worker)
+
 
 class HookClientTests(unittest.TestCase):
     def request(self, phase, reply):

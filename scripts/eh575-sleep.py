@@ -139,13 +139,32 @@ class Worker:
 
 
 class SleepSupervisor:
-    def __init__(self, factory=Worker, prepare=lambda: True):
+    def __init__(self, factory=Worker, prepare=lambda: True, log=print):
         self.factory = factory
         self.prepare = prepare
         self.worker = None
+        self.log = log
+
+    def reap_finished(self):
+        """Clear only a confirmed dead child after a lost POST/cancelled sleep.
+
+        Native expiry attempts restoration itself. We do not label that recovery
+        successful without the normal marker AND zero exit; a failed cycle is
+        logged. A future PRE performs fresh native initialization/calibration.
+        """
+        worker = self.worker
+        if worker is None or worker.process is None or worker.process.poll() is None:
+            return False
+        restored = self.cleanup()
+        self.log("eh575-sleep: worker exited outside POST; " +
+                 ("capture recovery confirmed" if restored else
+                  "recovery NOT confirmed; check normal verification") +
+                 "; child reaped, no live USB worker retained", flush=True)
+        return True
 
     def command(self, command):
         if command == "PRE suspend":
+            self.reap_finished()
             if self.worker is not None:
                 return "ERROR previous worker still retained; POST required"
             if not self.prepare():
@@ -211,6 +230,7 @@ def serve():
                 try:
                     client, _ = server.accept()
                 except TimeoutError:
+                    supervisor.reap_finished()
                     continue
                 with client:
                     client.settimeout(2)  # A root hook sends its short request immediately.

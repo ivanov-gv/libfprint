@@ -324,7 +324,12 @@ sudo apt remove eh575-touch-wake-experimental
 The working matcher and templates remain unchanged. The separately opted-in
 `eh575-wakeup.service` is not stopped by add-on removal. Native setup has a
 12-second budget; restoration gets an independent five seconds. A missing POST
-or cancelled sleep recovers after 120 awake seconds. Supervisor control/output
+or cancelled sleep attempts recovery after 120 awake seconds. The supervisor
+reaps a confirmed exited child between hooks (and before a new PRE), so a lost
+POST cannot leave a dead worker lease blocking future sleep cycles. Unconfirmed
+recovery is logged as a failure, not a successful handoff; a new cycle performs
+fresh initialization/calibration. A live or unknown child is never discarded.
+Supervisor control/output
 is bounded, peer access is root-only, and completion requires actual child exit.
 Uncatchable termination/disconnect cannot guarantee restoration; a failure is
 logged and ordinary wake/password remain the fallback.
