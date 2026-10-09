@@ -122,6 +122,8 @@ class Fixtures:
         self.stage = 0
         self.properties = {}
         self.enrolling = False
+        self.lifecycle_test = False
+        self.verify_results = []
         self.registrations = []
         info = Gio.DBusNodeInfo.new_for_xml(XML)
         for name, path, interface in ((POLKIT, AUTH_PATH, AUTH_IFACE),
@@ -143,6 +145,9 @@ class Fixtures:
         self.connection.signal_subscribe(
             SERVICE, DEVICE, "EnrollStatus", None, None,
             Gio.DBusSignalFlags.NONE, self.enroll_status)
+        self.connection.signal_subscribe(
+            SERVICE, DEVICE, "VerifyStatus", None, None,
+            Gio.DBusSignalFlags.NONE, self.verify_status)
         if forward_sleep:
             # This is the ONLY connection to the host bus: subscribe to genuine
             # logind notifications, never call a power/authentication method.
@@ -205,6 +210,9 @@ class Fixtures:
         elif not done:
             print("Retry: lift fully, then use a smaller flat-pad shift.", flush=True)
 
+    def verify_status(self, connection, sender, path, interface, signal_name, parameters):
+        self.verify_results.append(parameters.unpack())
+
     def device_properties(self, connection, sender, path, interface, signal_name, parameters):
         device_interface, changed, invalid = parameters.unpack()
         current = self.properties.setdefault(path, {})
@@ -212,7 +220,9 @@ class Fixtures:
         current.update(changed)
         needed, present = current.get("finger-needed", False), current.get("finger-present", False)
         if needed and not present and previous != (True, False):
-            if self.enrolling:
+            if self.lifecycle_test:
+                print("Reader calibrated. Keep EMPTY for the lifecycle test.", flush=True)
+            elif self.enrolling:
                 areas = ("center", "slightly tip-side", "slightly base-side",
                          "slightly left-side", "slightly right-side")
                 area = areas[min(self.stage // 3, 4)]
@@ -288,6 +298,8 @@ def discover(connection):
 
 def lifecycle(bus, fixture, sleeping=False):
     print("Keep the reader EMPTY throughout this cancellation test.", flush=True)
+    fixture.lifecycle_test = True
+    fixture.verify_results.clear()
     connection = connect(bus.address)
     path = discover(connection)
     def operation(method, signature=None, args=()):
@@ -313,6 +325,8 @@ def lifecycle(bus, fixture, sleeping=False):
         operation("Release")
         operation("Claim", "(s)", ("",))
         operation("Release")
+        if any(result == "verify-match" for result, done in fixture.verify_results):
+            raise RuntimeError("An empty-reader lifecycle test unexpectedly matched; do not deploy")
         print("Private " + ("simulated sleep/resume" if sleeping else "VerifyStop") +
               " completed; device can be reclaimed. Now verify with a real touch.", flush=True)
         if not sleeping:
@@ -330,6 +344,8 @@ def lifecycle(bus, fixture, sleeping=False):
                         raise
                     time.sleep(.1)
             operation("Release")
+            if any(result == "verify-match" for result, done in fixture.verify_results):
+                raise RuntimeError("A disconnect test unexpectedly matched; do not deploy")
             print("Disconnected client was released; device can be reclaimed.", flush=True)
     finally:
         if not connection.is_closed():

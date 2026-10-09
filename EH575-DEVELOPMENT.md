@@ -247,7 +247,15 @@ commit `b54a007ccf58ac0ae074c7151b223f35cbd17306`. No upstream source patch is
 needed for this test. Full upstream fprintd tests and real GNOME deployment remain
 separate work.
 
+The next, separately approved system trial is described in
+[EH575-GNOME-TRIAL.md](EH575-GNOME-TRIAL.md). Its package builder prepares a
+root-owned service-scoped override and rollback, but does NOT install it.
+Private cancellation/disconnect and simulated sleep/reclaim passed on 2026-10-09;
+physical sleep while the same daemon stays running and actual GNOME behavior still
+need testing. System authentication remains unchanged by package preparation.
+
 ### Default stationary image driver
+
 
 With a compiler, Meson, Ninja, pkg-config, GLib development headers, GUsb
 0.3.3 or newer and libusb development headers available, run from this clone:

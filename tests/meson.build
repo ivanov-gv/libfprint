@@ -32,6 +32,9 @@ if 'egis0575' in drivers
 endif
 
 if get_option('egis0575_ridge')
+  test('egis0575-package', python3,
+    args: [files('test-egis0575-package.py')],
+    suite: ['drivers', 'egis0575'])
   if run_command(python3, '-c', 'from gi.repository import Gio, GLib', check: false).returncode() == 0 and find_program('dbus-daemon', required: false).found()
     test('egis0575-fprintd-session', python3,
       args: [files('test-egis0575-fprintd-session.py')],
