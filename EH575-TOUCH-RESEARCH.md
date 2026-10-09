@@ -3,9 +3,12 @@
 Target: `1c7a:0575`, revision `1072`. Both touch-to-wake from real suspend and
 touch-to-activate a blanked GNOME lock screen are requirements. The owner confirmed
 real suspend wake by touch in the isolated, held-claim detector experiment on
-2026-10-09. Automatic suspend arming and awake blank-screen integration are not
-implemented. The current package changes USB wake permission only; it does not
-arm the sensor's low-power touch detector.
+2026-10-09, then confirmed the released-claim/open-handle variant and successful
+normal verification afterward. A separate, disabled-by-default automatic suspend
+add-on is now available for physical trials; its live ordering/reliability is not
+yet verified. Awake blank-screen integration is not implemented. The existing
+matcher package still changes USB wake permission only; detector arming is shipped
+only in the separate opt-in add-on described below.
 
 An uninstalled, explicitly selected `detector` probe now measures and arms a
 cross-checked volatile detector path for **awake-only** observation. It is not a
@@ -249,15 +252,82 @@ exposure check; the detector measured reference 3, DC 11/20, mean 103 and
 threshold 183. Clock evidence indicated approximately 2.48 seconds asleep.
 Capture restoration succeeded. Immediate repeat attempts refused to run because
 fprintd was active; those refusals are ownership protection, not failed wake
-trials. Normal fingerprint verification after this particular trial has not yet
-been reported.
+trials. The owner subsequently ran normal `fprintd-verify -f right-index-finger`
+and reported `verify-match`.
 
 This supports retaining the open handle without an exclusive interface claim,
 but does not establish runtime autosuspend as the sole cause: the unsuccessful
 closed-handle trial slept longer and used different measured calibration values.
-Repeat longer suspend trials and post-resume verification are still needed.
+Repeat longer suspend trials are still needed.
 The probe is not a daemon and has not been installed or enabled for GNOME;
-automatic arming and a race-safe authentication handoff remain development work.
+automatic arming and a race-safe authentication handoff still need physical
+validation in the new separate add-on.
+
+## Automatic suspend add-on (opt-in physical trial)
+
+`scripts/eh575-sleep-package.py` prepares a separate
+`eh575-touch-wake-experimental` package. It never installs or starts it. The
+package does not replace the working matcher, change fprintd/PAM/GNOME, migrate
+templates, or provide an authentication result. Its service remains disabled on
+installation. Ordinary logind-driven suspend is the only supported sleep type;
+hibernate/hybrid/suspend-then-hibernate and awake screen wake are not armed.
+
+The root supervisor starts without USB access. A system-sleep PRE hook requests
+one native worker after logind's sleep preparation; the worker independently
+requires `PreparingForSleep=true`, refuses a busy interface, uses the measured
+volatile detector, releases the interface and retains the handle. No USB I/O
+occurs while waiting/asleep. POST requests bounded capture restoration and waits
+for that exact child to exit before returning. `user.slice` is frozen during
+the hooks, so no user service is called and GNOME cannot race POST cleanup through
+its resume notification. See [systemd's hook contract](https://github.com/systemd/systemd/blob/main/man/systemd-suspend.service.xml).
+This ordering is a design backed by the lifecycle sources, not a passed physical
+trial. If fprintd still holds the interface, arming is skipped; it is never stopped
+and its claim is never stolen.
+
+Prepare the add-on from committed source. The builder compiles the independent
+worker with the extracted development dependencies, checks its native dependencies
+and refuses a runtime build-path or sanitizer dependency:
+
+```sh
+python3 scripts/eh575-sleep-package.py \
+  --deps /tmp/eh575-native-deps/root \
+  --output /tmp/eh575-touch-wake-package
+```
+
+After explicitly installing the resulting add-on with `apt-get --no-remove`,
+start the temporary trial (do not enable at boot yet):
+
+```sh
+sudo systemctl start eh575-detector-sleep.service
+systemctl status eh575-detector-sleep.service
+systemctl suspend
+```
+
+Keep the reader empty before suspend. After at least 20–30 seconds of actual
+sleep, touch. Use keyboard/power fallback if needed; require normal enrolled
+matching and wrong-finger rejection after resume. Inspect both journals:
+
+```sh
+journalctl -b -u eh575-detector-sleep.service -u systemd-suspend.service --no-pager
+fprintd-verify -f right-index-finger
+```
+
+Repeat longer cycles, keyboard wake, pending verification, password unlock, and
+finger-present/failed-calibration cases. No success is inferred from synthetic
+tests or permission flags. Roll back only the add-on with:
+
+```sh
+sudo systemctl disable --now eh575-detector-sleep.service
+sudo apt remove eh575-touch-wake-experimental
+```
+
+The working matcher and templates remain unchanged. The separately opted-in
+`eh575-wakeup.service` is not stopped by add-on removal. Native setup has a
+12-second budget; restoration gets an independent five seconds. A missing POST
+or cancelled sleep recovers after 120 awake seconds. Supervisor control/output
+is bounded, peer access is root-only, and completion requires actual child exit.
+Uncatchable termination/disconnect cannot guarantee restoration; a failure is
+logged and ordinary wake/password remain the fallback.
 
 Run the modes one at a time:
 

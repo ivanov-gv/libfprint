@@ -17,6 +17,22 @@ if 'egis0575' in drivers
     include_directories: include_directories('../libfprint/drivers'),
     dependencies: [gusb_dep, mathlib_dep],
     install: false)
+  executable('eh575-sleep-worker', 'eh575-sleep-worker.c',
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: [gusb_dep, mathlib_dep],
+    install: false)
+  sleep_test = executable('test-egis0575-sleep', 'test-egis0575-sleep.c',
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: [gusb_dep, mathlib_dep])
+  test('egis0575-sleep', sleep_test,
+    env: ['G_DEBUG=fatal-warnings'],
+    suite: ['drivers', 'egis0575'])
+  test('egis0575-sleep-supervisor', python3,
+    args: [files('test-egis0575-sleep.py')],
+    suite: ['drivers', 'egis0575'])
+  test('egis0575-sleep-package', python3,
+    args: [files('test-egis0575-sleep-package.py')],
+    suite: ['drivers', 'egis0575'])
   contact_test = executable('test-egis0575-contact', 'test-egis0575-contact.c',
     include_directories: include_directories('../libfprint/drivers'),
     dependencies: [gusb_dep, mathlib_dep])

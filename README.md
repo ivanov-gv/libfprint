@@ -390,7 +390,11 @@ Waking from suspend is separate from fingerprint matching. On the development
 laptop, the EH575 advertises USB remote wake but its own and its root hub's wake
 permissions were disabled; the PCI controller and platform wake permissions were
 already enabled. This is promising, not proof that touch generates a wake event.
-No sensor-side low-power/wake command has been identified or implemented.
+Subsequent measured-detector experiments established touch wake on this laptop
+while a USB handle is retained, including after releasing the interface claim.
+Normal fprintd verification matched after restoration. Closing the handle before
+sleep failed in a longer trial; the precise cause and long-term reliability remain
+under investigation. The permission helper alone does not arm this detector.
 
 The package includes a **disabled-by-default** permission trial. Read status, then
 start it temporarily with another wake method and password access available:
@@ -430,9 +434,14 @@ Disable and restore wake settings without removing fingerprint support:
 sudo systemctl disable --now eh575-wakeup.service
 ```
 
-If touching still does not wake, disable the trial. The next development step is
-investigating the EH575's sensor-side wake arming, potentially by tracing the
-Windows driver's sleep preparation; do not guess undocumented register writes.
+The new **separate** `eh575-touch-wake-experimental` add-on uses the characterized
+measured detector to arm before ordinary suspend, retain an unclaimed USB handle,
+and restore/release it in the post-resume hook before normal GNOME authentication.
+It ships disabled, changes no matcher/PAM/GNOME/templates, and has software tests
+but still needs physical automatic-cycle and password-fallback validation. See
+[the add-on trial, build and rollback](EH575-TOUCH-RESEARCH.md#automatic-suspend-add-on-opt-in-physical-trial).
+Awake blank-screen wake is still a separate development target. Do not treat this
+prototype or enabled sysfs permission as fully verified automatic wake support.
 This trial is for suspend, not a promise of power-on or hibernation wake.
 
 ### Rollback

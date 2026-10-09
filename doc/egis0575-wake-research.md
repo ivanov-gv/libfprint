@@ -1,6 +1,6 @@
 # EH575 hardware wake investigation
 
-## Status: automatic wake integration not implemented
+## Status: automatic suspend add-on ready for physical trials, not verified
 
 The current USB-permission helper failed to produce touch wake in owner-run
 real s2idle trials on 2026-10-09, including a logged cycle at 14:18 local time.
@@ -25,12 +25,23 @@ sensor. This experiment sends no USB traffic while waiting, changes no permanent
 power settings, and still requires manual suspend. The owner explicitly confirmed
 touch wake in one trial on 2026-10-09: approximately 2.48 seconds asleep,
 reference 3, DC 11/20, mean 103 and threshold 183. Capture restoration succeeded.
-Normal fingerprint verification afterward is still awaiting confirmation, as
-are repeated longer suspend trials. Two immediate repeat attempts were rejected
+Normal fingerprint verification afterward subsequently matched. Repeated longer
+suspend trials are still needed. Two immediate repeat attempts were rejected
 because fprintd was active; these are safety refusals, not failed wake trials.
 Recovery now reports only the last command's opcode/register, exchange count and
 known busy-bit state, not raw USB replies. See EH575-TOUCH-RESEARCH.md for the full
 command and cleanup/fallback procedure.
+
+An independent opt-in `eh575-touch-wake-experimental` add-on now implements the
+PRE/POST hook lifecycle around that successful open-handle path. It retains no
+USB handle at normal awake idle, refuses busy claims, requires logind sleep
+preparation, and restores/reaps before POST returns. Its supervisor and control
+messages are root-only, bounded and tested with synthetic children/pipes. It
+does not own a D-Bus name, stop fprintd, change PAM/GNOME/templates or authenticate.
+Installation does not start/enable it. The existing matcher package is unchanged.
+Physical automatic ordering, repeated long sleep, GNOME/password fallback, and
+busy/calibration failure behavior still need owner-run trials. Awake blank-screen
+wake remains incomplete. See EH575-TOUCH-RESEARCH.md for trial and rollback.
 
 ## Published static-analysis leads
 
@@ -333,4 +344,4 @@ state hooks, and physical keyboard/password/sleep/disable tests. Do not install
 or enable a lock-screen companion until those integration gates are implemented
 and checked. The owner-confirmed unclaimed-handle suspend result is separate
 physical evidence, not a result of these synthetic tests. Longer repeated cycles,
-post-resume verification and automatic arming/handoff still need validation.
+automatic arming/handoff and repeated longer cycles still need physical validation.
