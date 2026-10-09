@@ -8,7 +8,7 @@ typedef struct
 {
   Eh575Command commands[4096];
   unsigned int used, fail_at, malformed_at, polls;
-  uint8_t dc, mean;
+  uint8_t dc, mean, status;
   int busy, invalid_stats;
   int image_dc, target_dc, fail_capture, textured, stale_first, impossible, unstable;
   unsigned int images;
@@ -35,6 +35,8 @@ exchange (void *context, const Eh575Command *cmd, uint8_t *reply, size_t *length
       reply[5] = fake->busy ? 0x80 : 0;
       if (reg == 0x0f)
         reply[5] = fake->image_dc;
+      if (reg == 1)
+        reply[5] = fake->status;
     }
   if (op == 0x61 && reg == 0x0f)
     fake->image_dc = cmd->data[6];
@@ -225,6 +227,25 @@ empty_exposure (void)
       }
 }
 
+static void
+contact_handoff (void)
+{
+  for (guint status = 0; status < 256; status++)
+    {
+      Fake fake = {.status = status};
+      g_assert_cmpint (eh575_detector_contact_status (exchange, &fake), ==,
+                       status == 0 ? 0 : status == 4 ? 1 : -1);
+      g_assert_cmpuint (fake.used, ==, 1);
+    }
+  Fake fake = {.status = 4, .fail_at = 1};
+  g_assert_cmpint (eh575_detector_contact_status (exchange, &fake), ==, -1);
+  fake = (Fake){.status = 4, .malformed_at = 1};
+  g_assert_cmpint (eh575_detector_contact_status (exchange, &fake), ==, -1);
+  for (guint mask = 0; mask < 32; mask++)
+    g_assert_cmpint (eh575_detector_contact_ready (mask & 1, mask & 2, mask & 4,
+                                                  mask & 8, mask & 16), ==, mask == 15);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -236,5 +257,6 @@ main (int argc, char **argv)
   g_test_add_func ("/eh575/detector/restore-failures", restore_failures);
   g_test_add_func ("/eh575/detector/sleep-evidence", sleep_evidence);
   g_test_add_func ("/eh575/detector/empty-exposure", empty_exposure);
+  g_test_add_func ("/eh575/detector/contact-handoff", contact_handoff);
   return g_test_run ();
 }

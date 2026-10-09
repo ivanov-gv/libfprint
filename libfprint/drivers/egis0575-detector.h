@@ -21,6 +21,15 @@ typedef struct
   int ready;
 } Eh575Detector;
 
+/* A contact indication may be handed to the UI only AFTER successful capture
+ * recovery and USB release/close. This is never an authentication result.
+ */
+static inline int
+eh575_detector_contact_ready (int seen, int restored, int released, int closed, int cancelled)
+{
+  return seen && restored && released && closed && !cancelled;
+}
+
 /* CLOCK_BOOTTIME includes host sleep; CLOCK_MONOTONIC does not. Units must match.
  * A positive difference is sleep evidence, never identification of its wake source.
  */
@@ -47,6 +56,19 @@ eh575_detector_write (Eh575DetectorIO io, void *context, uint8_t reg, uint8_t va
   Eh575Command cmd = {7, {'E', 'G', 'I', 'S', 0x61, reg, value}};
   uint8_t reply[64];
   return eh575_detector_io (io, context, &cmd, reply);
+}
+
+/* Only 0 (empty) and 4 (latched contact) were characterized on this unit.
+ * Fail closed on an unknown status or malformed/failed exchange.
+ */
+static inline int
+eh575_detector_contact_status (Eh575DetectorIO io, void *context)
+{
+  const Eh575Command cmd = {7, {'E', 'G', 'I', 'S', 0x60, 1, 0}};
+  uint8_t reply[64];
+  if (!eh575_detector_io (io, context, &cmd, reply) || (reply[5] != 0 && reply[5] != 4))
+    return -1;
+  return reply[5] == 4;
 }
 
 /* Match the installed capture calibration's characterized DC range and final

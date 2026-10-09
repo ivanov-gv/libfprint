@@ -21,14 +21,18 @@ def wake_ready():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch", "detector", "detector-suspend", "detector-suspend-released"))
+    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch", "detector", "detector-contact", "detector-suspend", "detector-suspend-released"))
     parser.add_argument("--allow-suspend-test", action="store_true", help="explicitly permit either manual detector-suspend experiment")
+    parser.add_argument("--allow-contact-test", action="store_true", help="explicitly permit the awake one-shot contact handoff experiment")
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--deps", type=Path)
     args = parser.parse_args()
     suspend_test = args.mode in ("detector-suspend", "detector-suspend-released")
+    contact_test = args.mode == "detector-contact"
     if args.allow_suspend_test != suspend_test:
         parser.error("Suspend modes require --allow-suspend-test; do not use that flag with awake modes")
+    if args.allow_contact_test != contact_test:
+        parser.error("detector-contact requires --allow-contact-test; do not use that flag with other modes")
     if os.geteuid() == 0:
         parser.error("Run without sudo, from an unlocked local terminal")
     build = args.build.resolve(strict=True)
@@ -63,7 +67,7 @@ def main():
     env["LD_LIBRARY_PATH"] = ":".join(libraries)
     print("Close other fingerprint clients and keep this terminal visible. " +
           ("Suspend ONLY after SUSPEND TEST READY." if suspend_test else "Do NOT suspend during the probe."), flush=True)
-    command = [str(binary), args.mode] + (["--allow-suspend-test"] if suspend_test else [])
+    command = [str(binary), args.mode] + (["--allow-suspend-test"] if suspend_test else ["--allow-contact-test"] if contact_test else [])
     os.execve(binary, command, env)
 
 

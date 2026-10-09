@@ -229,3 +229,32 @@ awake blank-screen integration remain unverified. The full wake goal remains
 active and unachieved.
 No package should silently arm wake, alter PCI/ACPI policy, keep the CPU awake,
 poll during suspend, or treat a contact event as authentication.
+
+## Awake GNOME handoff preparation
+
+The installed Ubuntu Shell 50.1 embedded resources were rechecked from
+`/usr/lib/gnome-shell/libshell-18.so`. Its screen shield cancels the authentication
+dialog on idle and before sleep. `_wakeUpScreen()` clears the blanking lightboxes
+and emits a wake signal; `_activateDialog()` starts the ordinary locked-session
+dialog. The unlock dialog's `activate()` calls its normal prompt path, which uses
+GDM. No deactivation/unlock function or authentication result should be synthesized.
+These private APIs are version-sensitive: a companion must fail safely when its
+supported Shell API/state is absent. See upstream
+[screen shield](https://github.com/GNOME/gnome-shell/blob/50.1/js/ui/screenShield.js)
+and [session-mode extension documentation](https://gjs.guide/extensions/topics/session-modes.html).
+An extension can opt into `unlock-dialog` mode, but its lifecycle may be disabled
+and re-enabled on mode changes; every disable path must cancel and release its
+native helper. A logged-in session extension does not automatically run in the
+separate GDM greeter process.
+
+The uninstalled `detector-contact` experiment now provides one-shot, awake contact
+observation followed by capture recovery and USB release/close before it emits a
+contact-only marker. It refuses pending sleep/active fprintd and cancels on their
+system-bus transitions. It does not wake or unlock the display. That marker and
+successful process exit are prerequisites for a future companion's UI action,
+not authentication evidence. Synthetic status/notification/cancellation tests
+exercise its fail-closed gates; real bus delivery and USB ownership races remain
+unverified. The current unlocked-only helper is not sufficient for lock-screen
+use: a companion must start it only when normal authentication is idle and stop
+it before keyboard/mouse-driven authentication or sleep. That integration is not
+yet installed or complete.

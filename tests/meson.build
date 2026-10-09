@@ -17,6 +17,12 @@ if 'egis0575' in drivers
     include_directories: include_directories('../libfprint/drivers'),
     dependencies: [gusb_dep, mathlib_dep],
     install: false)
+  contact_test = executable('test-egis0575-contact', 'test-egis0575-contact.c',
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: [gusb_dep, mathlib_dep])
+  test('egis0575-contact', contact_test,
+    env: ['G_DEBUG=fatal-warnings'],
+    suite: ['drivers', 'egis0575'])
   test('egis0575-touch-runner', python3,
     args: [files('test-egis0575-touch-runner.py')],
     suite: ['drivers', 'egis0575'])

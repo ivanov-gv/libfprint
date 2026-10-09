@@ -28,9 +28,9 @@ class RunnerPolicy(unittest.TestCase):
         (self.build / "tests").mkdir()
         (self.build / "tests/eh575-touch-probe").touch()
 
-    def invoke(self, mode="touch", uid=1000, status=3, permit=False, wake_status=0, wake_error=None):
+    def invoke(self, mode="touch", uid=1000, status=3, permit=False, contact=False, wake_status=0, wake_error=None):
         responses = [subprocess.CompletedProcess([], status), subprocess.CompletedProcess([], wake_status)]
-        arguments = ["eh575-touch.py", mode, "--build", str(self.build)] + (["--allow-suspend-test"] if permit else [])
+        arguments = ["eh575-touch.py", mode, "--build", str(self.build)] + (["--allow-suspend-test"] if permit else []) + (["--allow-contact-test"] if contact else [])
         with patch.object(sys, "argv", arguments), \
                 patch.object(runner.os, "geteuid", return_value=uid), \
                 patch.object(runner.subprocess, "run", side_effect=responses), \
@@ -67,6 +67,17 @@ class RunnerPolicy(unittest.TestCase):
                 self.assertNotIn("LIBUSB_DEBUG", call.args[2])
                 self.assertEqual(call.args[2]["LD_LIBRARY_PATH"], "")
         self.assertEqual({item.name for item in self.build.iterdir()}, {"meson-info", "tests"})
+
+    def test_contact_opt_in_and_guards(self):
+        self.assertEqual(self.invoke(mode="detector-contact")[0], 2)
+        self.assertEqual(self.invoke(contact=True)[0], 2)
+        self.assertEqual(self.invoke(mode="detector-contact", contact=True, permit=True)[0], 2)
+        self.assertEqual(self.invoke(mode="detector-suspend", contact=True, permit=True)[0], 2)
+        for arguments in ({"uid": 0}, {"status": 0}, {"status": 1}, {"status": 4}):
+            self.assertEqual(self.invoke(mode="detector-contact", contact=True, **arguments)[0], 2)
+        code, call = self.invoke(mode="detector-contact", contact=True)
+        self.assertIsNone(code)
+        self.assertEqual(call.args[1], [str(self.build / "tests/eh575-touch-probe"), "detector-contact", "--allow-contact-test"])
 
     def test_suspend_opt_in_and_wake_guards(self):
         self.assertEqual(self.invoke(permit=True)[0], 2)

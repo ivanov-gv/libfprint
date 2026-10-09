@@ -100,6 +100,44 @@ on that result. Uncatchable termination/disconnection cannot guarantee cleanup;
 normal driver initialization is still needed on the next claim. No enrollment or
 persistent capture calibration is accessed. Share the printed output, not images.
 
+### Awake one-shot contact handoff (development only)
+
+The `detector-contact --allow-contact-test` mode prepares the same measured
+detector, rejects a pre-latched/unknown status, and waits for a fresh contact by
+polling register `0x01` at most four times per second. It does not capture images
+while waiting, consume templates, authenticate, wake a screen or install a daemon.
+The current 45-second overall awake budget includes setup. Run unlocked, without
+sudo; do **not** lock or suspend during this development-only test.
+
+```sh
+python3 scripts/eh575-touch.py detector-contact --allow-contact-test \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root
+```
+
+Keep empty until `CONTACT TEST READY`, then touch once and hold. The sole handoff
+marker, `EH575_CONTACT_READY`, is printed only after successful detector exit,
+capture initialization, interface release and USB close, and never on cancellation
+or cleanup failure. It means contact only, **not a fingerprint match**. A future
+GNOME companion must also require process exit success before waking/showing the
+ordinary authentication dialog. The native helper must not retain the reader
+while GNOME/fprintd starts that authentication.
+
+This mode checks that logind is not preparing sleep and that system fprintd has
+no bus owner. It subscribes before checking, without auto-starting either service.
+Sleep preparation, fprintd bus-name acquisition, a lost system bus or Ctrl+C
+cancels observation and attempts bounded capture restoration. If a suspend is
+observed via clocks, contact notification is suppressed. Unknown detector statuses
+other than the characterized `0x00`/`0x04` abort. No interface is stolen and no
+authentication service is stopped. Cancellation is cooperative: these checks do
+not guarantee restoration before kernel freeze or beat every concurrent claim.
+There is no sleep inhibitor here. Real ownership races, host bus notifications,
+cleanup failures and GNOME handoff still need integration/physical testing.
+
+The helper is uninstalled and not an unattended watcher. No GNOME extension is
+installed or enabled. Use it first as an isolated unlocked test; releasing a USB
+handle safely is necessary but is not sufficient to provide awake lock-screen
+wake. After it finishes, normal `fprintd-verify` must still work.
+
 ### Measured-detector real-suspend experiment
 
 Prerequisites: the awake detector probe must succeed and report successful capture
@@ -264,6 +302,13 @@ polls, failure/malformed-reply injection at every calibration step, and restorat
 after partial entry/calibration. They also reject failed restoration at every
 transfer. Exposure tests cover all synthetic target DC values, a stale settling
 frame, contact-texture rejection, unattainable exposure and read/capture/write
-failures. Runner tests cover both suspend variants' explicit opt-in, inactive
+failures. Runner tests cover the contact and both suspend variants' explicit opt-in, inactive
 fprintd and wake-permission guards. These validate software control flow, not
 physical touch, USB wake or release/reclaim behavior on hardware.
+
+Contact synthetic tests additionally check all 256 status bytes, failed/malformed
+status exchanges, and all combinations of contact/restoration/release/close/
+cancellation notification gates. Native callback tests exercise sleep, service
+owner and bus-close cancellation, plus pre-cancelled and expired observations
+without USB or a system-bus connection. These do not prove real D-Bus subscription
+delivery, USB cleanup ordering under a race, or GNOME authentication handoff.
