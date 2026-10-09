@@ -258,6 +258,65 @@ test_malformed (void)
   g_assert_true (fp_device_close_sync (dev, NULL, &error));
 }
 
+typedef struct
+{
+  FpDevice *dev;
+  gboolean  done;
+  GError   *error;
+} SuspendTest;
+
+static void
+suspend_done (GObject *source, GAsyncResult *result, gpointer data)
+{
+  SuspendTest *test = data;
+
+  g_assert_false (fp_device_suspend_finish (FP_DEVICE (source), result, &test->error));
+  test->done = TRUE;
+}
+
+static gboolean
+suspend_when_matching (gpointer data)
+{
+  SuspendTest *test = data;
+
+  if (!FPI_DEVICE_EGIS0575 (test->dev)->matching)
+    return G_SOURCE_CONTINUE;
+  fp_device_suspend (test->dev, NULL, suspend_done, test);
+  return G_SOURCE_REMOVE;
+}
+
+static void
+test_suspend_worker (void)
+{
+  g_autoptr(FpDevice) dev = new_device ();
+  g_autoptr(GError) error = NULL;
+  wrong_finger = FALSE;
+  g_assert_true (fp_device_suspend_sync (dev, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (fp_device_resume_sync (dev, NULL, &error));
+  g_assert_no_error (error);
+  g_autoptr(FpPrint) print = enroll (dev, NULL, &error);
+  g_assert_no_error (error);
+  SuspendTest test = {dev, FALSE, NULL};
+  g_timeout_add (1, suspend_when_matching, &test);
+  gboolean match;
+  g_assert_false (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
+  g_assert_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_BUSY);
+  g_clear_error (&error);
+  while (!test.done)
+    g_main_context_iteration (NULL, TRUE);
+  g_assert_error (test.error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_NOT_SUPPORTED);
+  g_clear_error (&test.error);
+  assert_clean (dev);
+  g_assert_true (fp_device_resume_sync (dev, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (match);
+  assert_clean (dev);
+  g_assert_true (fp_device_close_sync (dev, NULL, &error));
+}
+
 int
 main (int argc, char **argv)
 {
@@ -265,5 +324,6 @@ main (int argc, char **argv)
   g_test_add_func ("/egis0575-ridge/public-roundtrip-match-reject-cancel-reactivate", test_roundtrip);
   g_test_add_func ("/egis0575-ridge/cancel-enrollment-progress", test_cancel_enroll);
   g_test_add_func ("/egis0575-ridge/malformed-template-no-usb", test_malformed);
+  g_test_add_func ("/egis0575-ridge/suspend-worker-resume-reactivate", test_suspend_worker);
   return g_test_run ();
 }

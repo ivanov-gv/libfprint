@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Build dependencies
-        run: sudo apt-get update && sudo apt-get install -y build-essential meson ninja-build pkg-config libglib2.0-dev libgusb-dev libusb-1.0-0-dev libopencv-dev
+        run: sudo apt-get update && sudo apt-get install -y build-essential meson ninja-build pkg-config libglib2.0-dev libgusb-dev libusb-1.0-0-dev libopencv-dev python3-gi dbus-daemon
       - name: Build without installation
         run: |
           meson setup "$RUNNER_TEMP/eh575-build" . -Ddrivers=egis0575 -Degis0575_ridge=${{ matrix.ridge }} -Dintrospection=false -Ddoc=false -Dinstalled-tests=false -Dudev_rules=disabled -Dudev_hwdb=disabled -Dwerror=true
@@ -22,4 +22,4 @@ jobs:
         run: meson test -C "$RUNNER_TEMP/eh575-build" egis0575-protocol egis0575-driver egis0575-quality fpi-device fpi-ssm --print-errorlogs
       - name: Native ridge matcher and real-core lifecycle tests
         if: matrix.ridge == 'true'
-        run: meson test -C "$RUNNER_TEMP/eh575-build" egis0575-ridge egis0575-ridge-device --print-errorlogs
+        run: meson test -C "$RUNNER_TEMP/eh575-build" egis0575-ridge egis0575-ridge-device egis0575-fprintd-session --print-errorlogs

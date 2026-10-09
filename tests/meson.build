@@ -32,6 +32,12 @@ if 'egis0575' in drivers
 endif
 
 if get_option('egis0575_ridge')
+  if run_command(python3, '-c', 'from gi.repository import Gio, GLib', check: false).returncode() == 0 and find_program('dbus-daemon', required: false).found()
+    test('egis0575-fprintd-session', python3,
+      args: [files('test-egis0575-fprintd-session.py')],
+      timeout: 30,
+      suite: ['drivers', 'egis0575'])
+  endif
   ridge_device_test = executable('test-egis0575-ridge-device',
     ['test-egis0575-ridge-device.c', '../libfprint/drivers/egis0575-ridge.cpp'],
     include_directories: include_directories('../libfprint/drivers'),

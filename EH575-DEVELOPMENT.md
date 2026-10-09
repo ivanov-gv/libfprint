@@ -143,6 +143,110 @@ not prove real-device recognition, GNOME behavior or security. Broad debug loggi
 is suppressed by the runner; driver-only scalar diagnostics may be requested with
 `G_MESSAGES_DEBUG=libfprint-egis0575`. Full upstream CI remains pending.
 
+
+### Real fprintd on an isolated test bus
+
+The native hardware trial reported on 2026-10-09 completed enrollment and accepted
+12/15 completed enrolled-finger scans; three were rejected and one additional
+attempt failed calibration. All 10 scans labeled non-enrolled fingers were rejected.
+The recordings did not identify the per-finger breakdown. These small, user-reported
+trials are development evidence, not a security certification or false-accept estimate.
+
+The next stage uses Ubuntu's REAL `/usr/libexec/fprintd`, not the Python compatibility
+bridge. The daemon loads the selected native libfprint build through a child-only
+library path. The supervisor verifies its actual mapped library and checks the
+exposed driver name, press type and 15 enrollment stages. On this laptop,
+stock fprintd 1.94.5 passed private-bus discovery, authorization and open/release.
+Real fprintd enrollment/verification still requires fresh hardware touches.
+
+No daemon patch, installation, systemd override, PAM change or GNOME change is made.
+A fresh Unix D-Bus daemon has no activation directories and only admits the current
+UID. Both bus-address variables are set ONLY in child processes. The system service
+is never stopped or contacted by the test clients. Templates are stored separately
+under `.state/eh575-fprintd/prints`, with a 0077 umask and a private 0700 state tree.
+Existing smoke-test/Python/system templates are not imported, modified or deleted.
+The real daemon's file-storage backend honors `STATE_DIRECTORY`; the supervisor
+requires the installed configuration to select this backend.
+
+A small TEST-ONLY PolicyKit fixture on this private bus allows only verify/enroll
+actions for bus subjects belonging to the current UID. Managing another user's
+prints is not authorized. This deliberately does NOT test real system PolicyKit
+authorization; it is not suitable for system login. A separate private logind
+fixture returns dummy inhibitor FDs, which cannot delay real sleep. The supervisor
+uses Python/Gio for orchestration and prompts only, never for matching or templates.
+Dependencies: Ubuntu's fprintd clients/daemon, dbus-daemon, Python 3 and python3-gi.
+
+Run from this clone without sudo:
+
+```sh
+python3 scripts/eh575-fprintd-session.py \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root \
+  -- check
+
+python3 scripts/eh575-fprintd-session.py \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root \
+  -- fprintd-enroll -f right-index-finger
+
+python3 scripts/eh575-fprintd-session.py \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root \
+  -- fprintd-verify -f right-index-finger
+```
+
+This is a NEW enrollment through fprintd: 15 stationary touches, three each at
+center/tip-side/base-side/left-side/right-side. Wait for `Reader ready` or
+`Reader calibrated`, not the stock client's initial `Enroll/Verify started` message.
+Lift fully when captured; use small overlapping placement changes BETWEEN touches.
+The test supervisor observes real D-Bus finger-status properties to print prompts.
+The enrolled print persists between private sessions, so repeat verification with
+both enrolled and non-enrolled fingers. Re-enrollment can replace ONLY that private
+fprintd print. `fprintd-delete`, when deliberately invoked through this supervisor,
+deletes ONLY private test prints; it never erases the other enrollment directories.
+
+After enrolling, test cancellation with an EMPTY reader:
+
+```sh
+python3 scripts/eh575-fprintd-session.py \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root \
+  -- cancel-test
+python3 scripts/eh575-fprintd-session.py \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root \
+  -- sleep-test
+```
+
+`cancel-test` checks VerifyStop, release/reclaim, and client-disconnect cleanup.
+`sleep-test` emits prepare-for-sleep/resume ONLY on the private bus and checks
+reclaim; it does not suspend the laptop or prove physical USB resume. Verify with a
+real finger again after each test. Native real-core tests also cover cancellation
+of an active matching worker by suspend, resume, and successful reactivation.
+
+For an actual laptop sleep/resume trial, omit the command to enter a private shell
+and add `--forward-sleep`. This option opens a READ-ONLY subscription to the real
+logind sleep signal and forwards just those notifications to the private logind
+fixture. It never calls a real power-management method or holds a real inhibitor.
+Use the normal desktop sleep control, then run `fprintd-verify` again in that same
+private shell after waking. Do not interrupt enrollment with sleep on purpose until
+simple verification/recovery works. Without this option, the private daemon does
+not receive real logind sleep notifications. This harness does not test system
+inhibition, GNOME unlock prompts, password fallback or system authorization.
+
+Omitting a command opens a shell whose fprintd commands all use the private bus.
+Type `exit` to close it. Only the child client, private real-daemon process and
+owned temporary bus are stopped; the private enrollment is preserved. A state lock
+prevents concurrent sessions sharing one private store. Failed checks or unexpected
+daemon exit stop the test rather than falling back to system fprintd.
+
+Run the bus/authorization/storage-guard tests (no sensor):
+
+```sh
+python3 tests/test-egis0575-fprintd-session.py
+```
+
+The source behavior was checked against official
+[fprintd v1.94.5](https://gitlab.freedesktop.org/libfprint/fprintd/-/tree/v1.94.5),
+commit `b54a007ccf58ac0ae074c7151b223f35cbd17306`. No upstream source patch is
+needed for this test. Full upstream fprintd tests and real GNOME deployment remain
+separate work.
+
 ### Default stationary image driver
 
 With a compiler, Meson, Ninja, pkg-config, GLib development headers, GUsb
