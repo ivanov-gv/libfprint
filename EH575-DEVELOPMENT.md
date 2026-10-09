@@ -214,10 +214,24 @@ python3 scripts/eh575-fprintd-session.py \
 ```
 
 `cancel-test` checks VerifyStop, release/reclaim, and client-disconnect cleanup.
-`sleep-test` emits prepare-for-sleep/resume ONLY on the private bus and checks
-reclaim; it does not suspend the laptop or prove physical USB resume. Verify with a
+`sleep-test` emits prepare-for-sleep/resume ONLY on the private bus. It now uses
+the STOCK `fprintd-verify` client and requires its release on the terminal suspend
+error BEFORE emitting resume, then checks reclaim. The previous direct-call test
+released only after resume and missed a lost-claim/open-device failure observed
+during physical sleep. It does not suspend the laptop or prove physical USB
+resume. Verify with a
 real finger again after each test. Native real-core tests also cover cancellation
-of an active matching worker by suspend, resume, and successful reactivation.
+of an active matching worker by suspend, close-before-resume, and successful
+reopen/reactivation. Core tests cover resume racing asynchronous close, including
+a close error. A running/preserved scan still blocks close; new scans and opens
+remain blocked while suspended.
+
+This branch includes a local libfprint CORE compatibility change: cleanup close
+is allowed while suspended once the active operation finishes, and resume waits
+for an in-flight close. Stock fprintd otherwise drops the failed-release claim
+while libfprint retains the open device. This is not an EH575 matcher adjustment
+or a daemon restart workaround. The API cleanup exception needs separate upstream
+review from the driver/matcher submission; it is not an upstream-accepted change.
 
 For an actual laptop sleep/resume trial, omit the command to enter a private shell
 and add `--forward-sleep`. This option opens a READ-ONLY subscription to the real
@@ -250,9 +264,11 @@ separate work.
 The next, separately approved system trial is described in
 [EH575-GNOME-TRIAL.md](EH575-GNOME-TRIAL.md). Its package builder prepares a
 root-owned service-scoped override and rollback, but does NOT install it.
-Private cancellation/disconnect and simulated sleep/reclaim passed on 2026-10-09;
-physical sleep while the same daemon stays running and actual GNOME behavior still
-need testing. System authentication remains unchanged by package preparation.
+Private cancellation/disconnect passed on 2026-10-09. Physical sleep during
+verification exposed the release-before-resume bug; the strengthened simulated
+stock-client release/reclaim test passes with the core cleanup fix. Physical
+sleep with that fix and actual GNOME behavior still need testing. Do not install
+the old `de8e9eab` trial artifact. System authentication remains unchanged.
 
 ### Default stationary image driver
 

@@ -296,10 +296,65 @@ def discover(connection):
     return paths[0]
 
 
+def sleep_lifecycle(bus, fixture):
+    """Use the STOCK client's release on the terminal error, before wake.
+
+    Waiting until after PrepareForSleep(false) to Release misses a real
+    libfprint/fprintd lost-claim/open-device failure.
+    """
+    connection = connect(bus.address)
+    path = discover(connection)
+    child = None
+    asleep = False
+    try:
+        child = subprocess.Popen(["fprintd-verify", "-f", "right-index-finger"],
+                                 env=client_env(bus.address), stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, text=True)
+        deadline = time.monotonic() + 16
+        while time.monotonic() < deadline:
+            properties, = call(connection, SERVICE, path, "org.freedesktop.DBus.Properties",
+                               "GetAll", "(s)", (DEVICE,))
+            if properties.get("finger-needed"):
+                break
+            if child.poll() is not None:
+                raise RuntimeError("Stock verification client exited before calibration was ready")
+            time.sleep(.1)
+        else:
+            raise RuntimeError("Calibration did not reach the ready state")
+        fixture.emit_sleep(True)
+        asleep = True
+        output, _ = child.communicate(timeout=10)
+        print(output, end="", flush=True)
+        if "ReleaseDevice failed" in output or not any(done for result, done in fixture.verify_results):
+            raise RuntimeError("Stock client did not cleanly release the interrupted scan before resume")
+        if any(result == "verify-match" for result, done in fixture.verify_results):
+            raise RuntimeError("An empty-reader suspend test unexpectedly matched; do not deploy")
+        fixture.emit_sleep(False)
+        asleep = False
+        deadline = time.monotonic() + 6
+        while True:
+            try:
+                call(connection, SERVICE, path, DEVICE, "Claim", "(s)", ("",))
+                break
+            except GLib.Error:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(.1)
+        call(connection, SERVICE, path, DEVICE, "Release")
+        print("Stock client released BEFORE resume; the same daemon can reopen/release after wake. Now verify with a real touch.", flush=True)
+    finally:
+        if asleep:
+            fixture.emit_sleep(False)
+        stop(child)
+        connection.close_sync(None)
+
+
 def lifecycle(bus, fixture, sleeping=False):
     print("Keep the reader EMPTY throughout this cancellation test.", flush=True)
     fixture.lifecycle_test = True
     fixture.verify_results.clear()
+    if sleeping:
+        return sleep_lifecycle(bus, fixture)
     connection = connect(bus.address)
     path = discover(connection)
     def operation(method, signature=None, args=()):
@@ -316,11 +371,6 @@ def lifecycle(bus, fixture, sleeping=False):
             time.sleep(.1)
         else:
             raise RuntimeError("Calibration did not reach the ready state")
-        if sleeping:
-            fixture.emit_sleep(True)
-            time.sleep(1)
-            fixture.emit_sleep(False)
-            time.sleep(1)
         operation("VerifyStop")
         operation("Release")
         operation("Claim", "(s)", ("",))

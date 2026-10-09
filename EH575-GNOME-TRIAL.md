@@ -18,11 +18,25 @@ reader. All completed successfully; no template was modified. The suspend warnin
 `Cannot run while suspended` is expected: an in-flight verification is interrupted,
 not accepted. Nine selected synthetic/native/guard suites also pass.
 
+The first physical same-daemon test on 2026-10-09 FAILED when sleep interrupted an
+active verification: stock `fprintd-verify` released before resume, libfprint
+rejected close while suspended, and fprintd dropped the claim while the device
+stayed open. Later claims failed with `The device has already been opened!`.
+The earlier simulated test missed this because it released after resume.
+
+The branch now contains a local core cleanup fix (separate upstream review
+required): completed operations may close while suspended, and resume waits for
+any asynchronous close. It does not permit new scans/opens during suspension or
+closing an active/preserved scan. The strengthened real-reader test uses the
+stock client, releases BEFORE simulated wake and successfully reclaims in the
+SAME daemon. Native worker and generic async-close/resume race tests also pass.
+Do NOT install the old `de8e9eab` package; it predates this fix.
+
 Still required before installation: verify with a real finger after those checks,
-and a physical sleep/resume trial while ONE private daemon stays running and receives
-real logind notifications. A separate session started after wake does not test that
-lifecycle. This harness does not test real system PolicyKit, service hardening or
-GNOME password fallback. The system trial checks those separately.
+and repeat physical sleep/resume while ONE private daemon stays running, including
+sleep DURING an active verification. A separate session started after wake does
+not test that lifecycle. This harness does not test real system PolicyKit, service
+hardening or GNOME password fallback. The system trial checks those separately.
 
 ## Physical sleep/resume without changing authentication
 
@@ -37,9 +51,13 @@ python3 scripts/eh575-fprintd-session.py \
 Inside that private shell:
 
 1. Run `fprintd-verify -f right-index-finger` and verify an enrolled-finger match.
-2. Leave that shell and daemon RUNNING. Suspend using the normal desktop control.
+2. Start a SECOND `fprintd-verify -f right-index-finger`, keep the reader empty,
+   wait for `Reader calibrated`, and suspend DURING that pending verification
+   using the normal desktop control. Leave the shell and daemon RUNNING.
    Resume and unlock with your existing password.
 3. The supervisor should print forwarded sleep notifications `True` then `False`.
+   The interrupted verification may end with `verify-unknown-error`; that is
+   expected and is not a match. There must be NO `ReleaseDevice failed` error.
 4. In the SAME private shell, run `fprintd-verify -f right-index-finger` again.
    Also repeat with a non-enrolled finger, which must not match.
 5. Type `exit`. Send the complete scalar output; never send fingerprint files.

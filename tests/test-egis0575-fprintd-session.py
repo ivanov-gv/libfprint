@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
+from unittest import mock
 
 from gi.repository import GLib
 
@@ -57,6 +59,48 @@ class Guards(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(old)
+
+
+class SleepOrder(unittest.TestCase):
+    def check_release_order(self, output):
+        events = []
+        fixture = SimpleNamespace(verify_results=[("verify-unknown-error", True)],
+                                  emit_sleep=lambda asleep: events.append(asleep))
+        connection = mock.Mock()
+        child = mock.Mock()
+        child.poll.return_value = None
+        def communicate(**kwargs):
+            self.assertEqual(kwargs, {"timeout": 10})
+            events.append("client-release")
+            return output, None
+        child.communicate.side_effect = communicate
+        def call(connection, service, path, interface, method, *args):
+            if method == "GetAll":
+                return ({"finger-needed": True},)
+            events.append(method)
+        with mock.patch.object(session, "connect", return_value=connection), \
+             mock.patch.object(session, "discover", return_value="/device"), \
+             mock.patch.object(session, "call", side_effect=call), \
+             mock.patch.object(session.subprocess, "Popen", return_value=child) as popen, \
+             mock.patch.object(session, "stop"), mock.patch("builtins.print"):
+            if "ReleaseDevice failed" in output:
+                with self.assertRaisesRegex(RuntimeError, "cleanly release"):
+                    session.sleep_lifecycle(SimpleNamespace(address="unix:path=/owned-test"), fixture)
+            else:
+                session.sleep_lifecycle(SimpleNamespace(address="unix:path=/owned-test"), fixture)
+            self.assertEqual(popen.call_args.args[0], ["fprintd-verify", "-f", "right-index-finger"])
+            self.assertEqual(popen.call_args.kwargs["env"]["DBUS_SYSTEM_BUS_ADDRESS"], "unix:path=/owned-test")
+        self.assertEqual(events[:3], [True, "client-release", False])
+        connection.close_sync.assert_called_once_with(None)
+        return events
+
+    def test_stock_client_releases_before_wake_and_reclaim(self):
+        self.assertEqual(self.check_release_order("Verify result: verify-unknown-error (done)\n"),
+                         [True, "client-release", False, "Claim", "Release"])
+
+    def test_release_failure_fails_gate_and_resumes_fixture(self):
+        self.assertEqual(self.check_release_order("ReleaseDevice failed: still busy\n"),
+                         [True, "client-release", False])
 
 
 class PrivateServices(unittest.TestCase):
