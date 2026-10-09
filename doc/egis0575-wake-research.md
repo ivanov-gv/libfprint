@@ -2,8 +2,9 @@
 
 ## Status: not implemented
 
-The current USB-permission helper failed to produce touch wake in two owner-run
-real s2idle trials on 2026-10-09. Awake image polling detects both contact and
+The current USB-permission helper failed to produce touch wake in owner-run
+real s2idle trials on 2026-10-09, including a logged cycle at 14:18 local time.
+Awake image polling detects both contact and
 release, but interrupt endpoints 83/84 were silent before/after our known capture
 initialization. None of this proves hardware wake is impossible. No undocumented
 command or firmware has been sent to the development laptop in this investigation.
@@ -18,7 +19,7 @@ binary, decompiled body, database, raw capture or biometric sample is copied int
 this repository. The archive's decompilation contains explicit warnings and
 multiple device classes, so it is a lead rather than a verified specification.
 
-Relevant facts in
+Initial leads in
 [the archived analysis](https://github.com/Animeshz/EgisTec-EH575/blob/57fa58a2b39a67869645dbaad4f3d12a6a67ec99/findings/EgisTec-EH575/decompiled_source/ghidra/EgisTouchFP0575.c):
 
 - `FUN_180013dc0` (lines 13729–13824) loads a remote-wake preference and separate
@@ -31,6 +32,12 @@ Relevant facts in
   initialization/calibration indirectly; resolving the correct derived-device
   methods matters. The published class/vtable reconstructions disagree in their
   granularity and cannot be treated as direct USB mappings.
+
+The first three named paths above are in an older/generic device branch, not
+the identified 5-series detector path. In particular, the archive's exported
+vtable lists sometimes concatenate adjacent tables. An index in that JSON is
+not a reliable byte offset in a device's actual vtable. The 5-series paths were
+subsequently cross-checked against the OEM binary and register transactions below.
 
 Inference: a separate device-side detection calibration/arming path is a plausible
 missing piece. This does NOT establish its exact registers, payload values,
@@ -70,18 +77,81 @@ user-control/enabled settings. Runtime policy, modern-standby behavior and the
 owner's previous Windows configuration remain unobserved.
 
 Read-only PE/string inspection confirms separate detection parameters, including
-gain, voltage reference, DC components and high/low detection thresholds, alongside
-the older named detection-calibration settings. In this binary, references to
-the detection-mode label occur near VA `0x180012625`, and the resume label near
-`0x1800123eb`. These differ from the published archive's addresses: do not apply
-its function/vtable addresses directly to this OEM version. The DLL also includes
-multiple sensor families and firmware-related strings. A string's presence does
-not establish a USB command, active code path, or compatibility with revision 1072.
+gain, voltage reference, DC components and high/low detection thresholds. The
+previously noted references near `0x180012625` / `0x1800123eb` belong to the older
+named parameter/resume branch, not the following 5-series detector functions.
+The OEM binary uses image base `0x180000000`; `.pdata` function ranges and direct
+calls establish these version-specific landmarks:
 
-This cross-check strengthens the separate-detector hypothesis but does not yet
-provide a complete, reversible wake-arming sequence. In particular, the correct
-EH575 device-method dispatch, calibration values and low-power event transport
-still need to be resolved before any new hardware command is tested.
+| Operation / diagnostic label | OEM function VA |
+| --- | --- |
+| `calibrate_detect_mode_5_series` | `0x180008814` |
+| `fp_tz_secure_set_detect_mode` | `0x180009d0c` |
+| `fp_tz_secure_set_detect_mode_exit` | `0x180009f4c` |
+| `fp_tz_secure_set_sensor_mode` | `0x18000a1a0` |
+| `finger_detect` | `0x18000ac9c` |
+| `get_image send EGIS_WAIT_INTERRUPT` | `0x18000b178` |
+
+The detector wrapper at `0x18000bd74` is called by `0x1800186bc` (call instruction
+`0x18001872c`); a nonzero argument selects detector entry, while zero selects a
+separate idle path. Calibration wrapper `0x18000be70` calls the calibration routine
+and persists the resulting detection fields. This is static data flow, not proof
+of which Windows power transition invoked these methods on the owner's laptop.
+The DLL includes several sensor families; do not reuse addresses from the older
+published binary or infer revision-1072 applicability from names alone.
+
+### Register-level observations, not a hardware recipe
+
+The 5-series detector path has different gain/reference/DC values from capture.
+Its calibration uses register bank `0x34`/`0x35`, then adjusts a DC component using
+a measured mean. One measurement branch uses `0x2c`/`0x2d` and reads statistics
+at `0x67`; another requires software image/bad-pixel handling. The high threshold
+is derived from the measured mean plus a separate margin. Capture exposure DC
+cannot simply substitute for these fields.
+
+Detector entry programs its ROI and analogue settings, enters low-power mode,
+then writes six registers in descending order starting at `0x45`. Its register
+order is low threshold, high threshold, `87`, `13`, `00`, `03`. A variant branch
+instead uses eight descending registers starting at `0x47`. The observed transport
+uses `EGIS` opcode `0x71` for descending writes, not opcode `0x63` (ascending).
+Variant selection and calibrated thresholds must not be guessed.
+
+The corresponding exit changes `0x0a`/`0x0c`, clears `0x40`, waits for its busy bit,
+and uses a descending write starting at `0x02`. Capture mode restores its own
+analogue settings and ROI afterward. Some OEM paths do not propagate every write
+failure; a Linux implementation must check all transfers, bound waits, and restore
+capture on failure rather than reproduce that behavior.
+
+### Cross-check against published Windows USB traces
+
+Only short outbound register commands were examined; image transfers were not
+decoded, printed or copied. All four `575-0` through `575-3` captures at the pinned
+archive commit contain one six-register descending detector write and one
+two-register exit write. For reproducibility, `logs/575-0.pcap` has SHA-256
+`b18fbab2f5e92222e3c3ba70d1856dce831f498b615c8d0b5fdc7702e82277cd`.
+
+That trace records ROI `06 60 06 05 2f 06`, detector gain `0a`, reference `03`,
+DC components `0c`/`17`, and detector bank `00 ac 87 13 00 03`. These are observations
+from another capture, **not defaults for this laptop**. The register ordering and
+mode-transition pattern agree with the 5-series binary. Following entry, the
+trace repeatedly polls register `0x01`; that is not proof that interrupt endpoint
+83/84 or USB remote wake works during host suspend. There is no verified physical
+suspend-and-touch-wake event in these traces.
+
+### Reproducible offline inspection
+
+`scripts/eh575-driver-report.py /absolute/path/to/EgisTouchFP0575.dll` prints a
+JSON report of the SHA-256, landmark addresses, containing function ranges,
+direct calls/callers and indirect-call counts. It accepts only the exact OEM DLL
+hash above. Obtain/extract the OEM files separately and keep them outside the
+repository. Use a trusted local copy: the before/after check detects ordinary
+changes, not hostile replace-and-restore races.
+
+The script uses the standard library and `/usr/bin/objdump`; it never loads the
+DLL, downloads files, extracts firmware, opens USB or saves a report automatically.
+PE metadata layout follows [Microsoft's PE format documentation](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format).
+Its tests use only original synthetic PE metadata, not proprietary fixtures.
+This report is a reproducibility aid, not an executed call graph or wake protocol.
 
 ## Linux-side evidence to collect
 
@@ -99,11 +169,21 @@ cleanup, but system-sleep hooks can run in parallel; a snapshot is not atomic wi
 the kernel suspend boundary. Post may observe policy already changed by resume.
 Logging cannot prove that the sensor internally armed a detector or retained power.
 
-Next protocol work needs the correct EH575 derived-device mapping, the transport
-of the detect-mode operation, bounds and origin of its calibration parameters,
-and a characterized reversal back to ordinary capture. A current OEM driver
-package can be analyzed without installing Windows or running its binaries; exact
-version and hash must be recorded if acquired. Only once the full reversible
-sequence is established should an isolated opt-in hardware arming test be added.
+The 2026-10-09 14:18:06–14:18:44 owner-run cycle entered actual kernel s2idle.
+Boot-time minus monotonic elapsed time indicates approximately 37.2 seconds
+asleep. The pre and post snapshots both recorded enabled reader/root-hub wake
+permission; reader and hub wake/active/abort counters remained zero. No reader
+disconnect appeared in that cycle. This weakens permission-only explanations
+but does not eliminate races between parallel hooks or prove an armed detector.
+The observed last wake IRQ (7, `pinctrl_amd`) does not uniquely identify the wake
+source. Later live reader permission was disabled, which must not be mistaken
+for its recorded pre/post state.
+
+Next protocol work needs the revision-1072 variant/dispatch mapping, calibration
+bounds and margin origin, the event transport and actual idle/suspend sequencing,
+and a tested reversal back to ordinary capture. The register transport is now
+cross-checked, but those remaining pieces prevent treating it as a wake recipe.
+Only once the full reversible sequence is established should an isolated opt-in
+hardware arming test be added.
 No package should silently arm wake, alter PCI/ACPI policy, keep the CPU awake,
 poll during suspend, or treat a contact event as authentication.

@@ -13,6 +13,9 @@ if 'egis0575' in drivers
   test('egis0575-touch-runner', python3,
     args: [files('test-egis0575-touch-runner.py')],
     suite: ['drivers', 'egis0575'])
+  test('egis0575-driver-report', python3,
+    args: [files('test-egis0575-driver-report.py')],
+    suite: ['drivers', 'egis0575'])
   eh575_calibration_test = executable('test-egis0575-calibration',
     'test-egis0575-calibration.c',
     include_directories: include_directories('../libfprint/drivers'),
