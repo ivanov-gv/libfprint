@@ -150,6 +150,12 @@ restore_failures (void)
       g_assert_false (eh575_detector_restore (exchange, &fake));
       g_assert_cmpuint (fake.used, ==, bad);
     }
+  Fake busy = {.busy = 1};
+  g_assert_false (eh575_detector_restore (exchange, &busy));
+  g_assert_cmpuint (busy.polls, ==, 64);
+  g_assert_cmpuint (busy.used, ==, 67);
+  g_assert_cmpuint (busy.commands[busy.used - 1].data[4], ==, 0x60);
+  g_assert_cmpuint (busy.commands[busy.used - 1].data[5], ==, 0x40);
 }
 
 static void

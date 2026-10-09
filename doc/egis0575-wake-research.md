@@ -1,6 +1,6 @@
 # EH575 hardware wake investigation
 
-## Status: not implemented
+## Status: automatic wake integration not implemented
 
 The current USB-permission helper failed to produce touch wake in owner-run
 real s2idle trials on 2026-10-09, including a logged cycle at 14:18 local time.
@@ -9,6 +9,23 @@ release, but interrupt endpoints 83/84 were silent before/after our known captur
 initialization. None of this proves hardware wake is impossible. No undocumented
 command or firmware has been sent to the development laptop in this investigation.
 The installed working fingerprint matcher and templates are unchanged.
+
+The owner later confirmed touch wake in one isolated trial retaining the USB
+claim and handle. Releasing the interface AND closing the handle failed: the
+owner woke by keyboard after approximately 20.61 seconds asleep; bounded capture
+restoration failed, but normal fprintd verification afterward matched. These
+results do not establish repeatable unattended suspend or awake screen wake.
+
+The next `detector-suspend-unclaimed` experiment releases the exclusive claim
+while retaining an open USB handle, separating ownership from close/runtime-PM
+effects. [Linux documents](https://docs.kernel.org/driver-api/usb/power-management.html)
+that an open usbfs file prevents the device being considered idle even without
+I/O. Runtime autosuspend is a hypothesis, not a proven explanation for this
+sensor. This experiment sends no USB traffic while waiting, changes no permanent
+power settings, and still requires manual suspend and physical wake confirmation.
+Recovery now reports only the last command's opcode/register, exchange count and
+known busy-bit state, not raw USB replies. See EH575-TOUCH-RESEARCH.md for the full
+command and cleanup/fallback procedure.
 
 ## Published static-analysis leads
 
@@ -219,9 +236,11 @@ permissions remained enabled, active counts increased and last wake IRQ changed
 to 9. The metadata are supporting evidence, not unique wake-source identification.
 Thus detector state survived one real suspend while the probe held the USB claim.
 
-The new `detector-suspend-released` variant tests whether that state and wake also
+The `detector-suspend-released` variant tested whether that state and wake also
 survive releasing/closing USB before suspend, then reacquires without stealing for
-bounded capture restoration. It is not physically validated or installed. The
+bounded capture restoration. Its owner-run trial failed as recorded above; it
+has not been installed. The new unclaimed/open-handle variant needs physical
+validation. The
 probe now settles/checks exposure with the already-characterized 0–63 DC range
 before detector calibration; contact/quality gates and restoration remain intact.
 Behavior after USB reset, repeated wake reliability, release/reclaim handoff and

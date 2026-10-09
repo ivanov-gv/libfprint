@@ -21,13 +21,13 @@ def wake_ready():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch", "detector", "detector-contact", "detector-suspend", "detector-suspend-released"))
-    parser.add_argument("--allow-suspend-test", action="store_true", help="explicitly permit either manual detector-suspend experiment")
+    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch", "detector", "detector-contact", "detector-suspend", "detector-suspend-released", "detector-suspend-unclaimed"))
+    parser.add_argument("--allow-suspend-test", action="store_true", help="explicitly permit a manual detector-suspend experiment")
     parser.add_argument("--allow-contact-test", action="store_true", help="explicitly permit the awake one-shot contact handoff experiment")
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--deps", type=Path)
     args = parser.parse_args()
-    suspend_test = args.mode in ("detector-suspend", "detector-suspend-released")
+    suspend_test = args.mode in ("detector-suspend", "detector-suspend-released", "detector-suspend-unclaimed")
     contact_test = args.mode == "detector-contact"
     if args.allow_suspend_test != suspend_test:
         parser.error("Suspend modes require --allow-suspend-test; do not use that flag with awake modes")

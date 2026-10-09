@@ -208,8 +208,43 @@ to reopen and exclusively claim the same device, then restore capture. It never
 steals an interface if another client claimed it, stops fprintd or resets USB. A
 disconnect/reset or competing claim can prevent recovery, which is reported as a
 failed restore; close the probe and check normal fprintd before another suspend.
-Uncatchable termination cannot guarantee restoration. This variant is not yet
-physically validated, installed, or an automatic wake service.
+Uncatchable termination cannot guarantee restoration. The owner tested this
+variant: touch did NOT wake the laptop; keyboard wake was needed after about
+20.61 seconds asleep. Capture restoration reported a status/busy timeout, but
+normal `fprintd-verify` afterward matched. This is not a working automatic wake
+service and has not been installed.
+
+### Release the claim but keep the handle open
+
+The next isolation experiment is `detector-suspend-unclaimed`. It releases the
+exclusive interface claim but keeps the USB handle open throughout the manual
+sleep test. Linux's [USB power-management documentation](https://docs.kernel.org/driver-api/usb/power-management.html)
+states that an open usbfs file makes a device non-idle even without I/O. Keeping
+it open tests whether runtime autosuspend before system suspend explains the
+difference between the held-claim success and closed-handle failure. This is a
+hypothesis, not an established hardware cause or a permanent power-policy change.
+
+```sh
+sudo systemctl start eh575-wakeup.service
+sudo /usr/libexec/eh575-wakeup reapply
+python3 scripts/eh575-touch.py detector-suspend-unclaimed --allow-suspend-test \
+  --build /tmp/eh575-libfprint-touch-power-build --deps /tmp/eh575-native-deps/root
+```
+
+Keep the reader empty until `SUSPEND TEST READY`. In another terminal, within
+120 awake seconds, run `systemctl suspend`. Wait until truly asleep (at least
+three seconds), then touch once. If no wake after 15 seconds, use the keyboard
+or power button. Do not run fingerprint clients during the experiment; they
+could overwrite detector state even though its exclusive claim was released.
+There is no USB I/O during the wait, sleep inhibitor, automatic suspend or wake
+timer. The mode does not write USB/hub/PCI/ACPI power policies.
+
+After resume, timeout or cancellation, it attempts to reclaim without stealing,
+restore capture, release and close. Wait for cleanup before `fprintd-verify`.
+Restoration failures now identify the last attempted opcode/register, exchange
+count and known busy-bit state; no raw replies or fingerprint data are printed.
+The unclaimed-handle variant still needs physical validation. It is not a daemon
+and has not been installed or enabled for GNOME.
 
 Run the modes one at a time:
 

@@ -60,7 +60,7 @@ cancelled_or_expired (void)
 {
   g_autoptr(GCancellable) cancel = g_cancellable_new ();
   g_autoptr(GError) error = NULL;
-  ProbeIO io = {NULL, cancel, &error};
+  ProbeIO io = {.cancel = cancel, .error = &error};
   deadline = g_get_monotonic_time () + 1000000;
   g_cancellable_cancel (cancel);
   g_assert_false (wait_for_contact (&io));
@@ -72,6 +72,25 @@ cancelled_or_expired (void)
   g_assert_error (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
 }
 
+static void
+early_transport_guards (void)
+{
+  g_autoptr(GError) error = NULL;
+  ProbeIO io = {.error = &error}; /* NULL USB: both guards must return before I/O. */
+  uint8_t reply[64];
+  size_t length = sizeof reply;
+  deadline = g_get_monotonic_time () - 1;
+  g_assert_false (detector_io (&io, &eh575_init_commands[0], reply, &length));
+  g_assert_error (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
+  g_assert_cmpuint (io.exchanges, ==, 0);
+  g_clear_error (&error);
+  deadline = g_get_monotonic_time () + 1000000;
+  Eh575Command invalid = {.length = 6};
+  g_assert_false (detector_io (&io, &invalid, reply, &length));
+  g_assert_no_error (error);
+  g_assert_cmpuint (io.exchanges, ==, 0);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -80,5 +99,6 @@ main (int argc, char **argv)
   g_test_add_func ("/eh575/contact/owner-signal", owner_signal);
   g_test_add_func ("/eh575/contact/lost-bus", lost_bus);
   g_test_add_func ("/eh575/contact/cancelled-or-expired", cancelled_or_expired);
+  g_test_add_func ("/eh575/contact/early-transport-guards", early_transport_guards);
   return g_test_run ();
 }

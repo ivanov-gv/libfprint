@@ -18,7 +18,17 @@ typedef struct
   GUsbDevice *usb;
   GCancellable *cancel;
   GError **error;
+  guint exchanges;
+  guint8 last_opcode, last_register, busy_bit;
+  gboolean busy_known;
 } ProbeIO;
+
+typedef enum
+{
+  EH575_HOLD_CLAIM,
+  EH575_HOLD_HANDLE,
+  EH575_CLOSE_HANDLE,
+} Eh575Handoff;
 
 typedef struct
 {
@@ -140,6 +150,10 @@ detector_io (void *context, const Eh575Command *cmd, uint8_t *reply, size_t *rep
   if (cmd->length < 7 || cmd->length > sizeof bytes)
     return FALSE;
   memcpy (bytes, cmd->data, cmd->length);
+  io->exchanges++;
+  io->last_opcode = cmd->data[4];
+  io->last_register = cmd->data[5];
+  io->busy_known = FALSE;
   if (!g_usb_device_bulk_transfer (io->usb, EH575_EP_OUT, bytes, cmd->length, &length, remaining (500), io->cancel, io->error))
     return FALSE;
   if (length != cmd->length)
@@ -155,6 +169,11 @@ detector_io (void *context, const Eh575Command *cmd, uint8_t *reply, size_t *rep
       g_set_error_literal (io->error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Unexpected command reply");
       return FALSE;
     }
+  if (cmd->data[4] == 0x60 && cmd->data[5] == 0x40)
+    {
+      io->busy_known = TRUE;
+      io->busy_bit = reply[5] & 0x80;
+    }
   g_usleep (2000);
   return TRUE;
 }
@@ -162,7 +181,7 @@ detector_io (void *context, const Eh575Command *cmd, uint8_t *reply, size_t *rep
 static gboolean
 command (GUsbDevice *usb, const Eh575Command *cmd, GCancellable *cancel, GError **error)
 {
-  ProbeIO io = {usb, cancel, error};
+  ProbeIO io = {.usb = usb, .cancel = cancel, .error = error};
   uint8_t reply[64];
   size_t length = sizeof reply;
   return detector_io (&io, cmd, reply, &length);
@@ -283,7 +302,7 @@ interrupt_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean
             {
               const Eh575Command cmd = {7, {'E', 'G', 'I', 'S', 0x60, 1, 0}};
               uint8_t reply[64];
-              ProbeIO io = {usb, cancel, error};
+              ProbeIO io = {.usb = usb, .cancel = cancel, .error = error};
               if (!eh575_detector_io (detector_io, &io, &cmd, reply))
                 return FALSE;
               status_changes += last_status >= 0 && last_status != reply[5];
@@ -477,9 +496,9 @@ wait_for_contact (ProbeIO *io)
 
 static gboolean
 detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean suspend_test,
-                gboolean released_test, gboolean contact_test, ProbeState *state)
+                Eh575Handoff handoff, gboolean contact_test, ProbeState *state)
 {
-  ProbeIO io = {usb, cancel, error};
+  ProbeIO io = {.usb = usb, .cancel = cancel, .error = error};
   Eh575Detector detector;
   Eh575EmptyCheck empty;
   gboolean ok = FALSE, changed = FALSE;
@@ -511,19 +530,24 @@ detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean 
             g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Touch already latched or status uncharacterized before observation; detector test aborted. Leave empty and retry");
           goto out;
         }
-      if (released_test)
+      if (handoff != EH575_HOLD_CLAIM)
         {
-          /* Deliberately leave the volatile detector armed, but relinquish the
-           * USB handle. This tests the handoff needed by a future sleep hook.
+          /* Leave the volatile detector armed, but relinquish the exclusive
+           * claim. Keeping versus closing the handle isolates runtime PM.
            * Do not reset, detach a kernel driver or stop/steal from fprintd.
            */
           if (!g_usb_device_release_interface (usb, 0, 0, error))
             goto out;
           state->claimed = FALSE;
-          if (!g_usb_device_close (usb, error))
-            goto out;
-          state->opened = FALSE;
-          g_print ("USB interface released and handle closed with detector armed.\n");
+          if (handoff == EH575_CLOSE_HANDLE)
+            {
+              if (!g_usb_device_close (usb, error))
+                goto out;
+              state->opened = FALSE;
+              g_print ("USB interface released and handle closed with detector armed.\n");
+            }
+          else
+            g_print ("USB interface released; handle kept open for the runtime-power test. No USB I/O until resume.\n");
         }
       if (contact_test)
         ok = state->contact = wait_for_contact (&io);
@@ -543,7 +567,7 @@ out:
   if (changed)
     {
       g_autoptr(GError) restore_error = NULL;
-      ProbeIO recovery = {usb, NULL, &restore_error};
+      ProbeIO recovery = {.usb = usb, .error = &restore_error};
       deadline = g_get_monotonic_time () + 5000000;
       gboolean access = TRUE;
       if (!state->opened)
@@ -558,8 +582,11 @@ out:
         }
       if (!access || !eh575_detector_restore (detector_io, &recovery))
         {
-          g_printerr ("Capture restoration FAILED: %s. No interface is stolen; close the probe and test fprintd normally before another suspend.\n",
-                      restore_error ? restore_error->message : "unexpected status or busy timeout");
+          g_printerr ("Capture restoration FAILED: %s. Last exchange opcode=0x%02x register=0x%02x, %u exchanges, busy-bit=%s.\n"
+                      "No interface is stolen; close the probe and test fprintd normally before another suspend.\n",
+                      restore_error ? restore_error->message : "unexpected status or busy timeout",
+                      recovery.last_opcode, recovery.last_register, recovery.exchanges,
+                      recovery.busy_known ? (recovery.busy_bit ? "set" : "clear") : "unknown");
           ok = FALSE;
         }
       else
@@ -576,14 +603,16 @@ main (int argc, char **argv)
 {
   const char *mode = argc >= 2 ? argv[1] : "";
   gboolean released_test = !strcmp (mode, "detector-suspend-released");
-  gboolean suspend_test = !strcmp (mode, "detector-suspend") || released_test;
+  gboolean unclaimed_test = !strcmp (mode, "detector-suspend-unclaimed");
+  gboolean suspend_test = !strcmp (mode, "detector-suspend") || released_test || unclaimed_test;
+  Eh575Handoff handoff = released_test ? EH575_CLOSE_HANDLE : unclaimed_test ? EH575_HOLD_HANDLE : EH575_HOLD_CLAIM;
   gboolean contact_test = !strcmp (mode, "detector-contact");
   gboolean initialized = !strcmp (mode, "interrupt-initialized") || !strcmp (mode, "touch") || !strcmp (mode, "detector") || suspend_test || contact_test;
 
   if ((suspend_test || contact_test ? argc != 3 || strcmp (argv[2], contact_test ? "--allow-contact-test" : "--allow-suspend-test") : argc != 2) ||
       (!initialized && strcmp (mode, "interrupt") && strcmp (mode, "open")) || geteuid () == 0)
     {
-      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch|detector OR detector-contact --allow-contact-test OR detector-suspend[-released] --allow-suspend-test\n");
+      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch|detector OR detector-contact --allow-contact-test OR detector-suspend[-released|-unclaimed] --allow-suspend-test\n");
       return 2;
     }
   g_autoptr(GError) error = NULL;
@@ -663,7 +692,7 @@ main (int argc, char **argv)
           goto out;
     }
   if (!strcmp (mode, "detector") || suspend_test || contact_test)
-    ok = detector_probe (usb, cancel, &error, suspend_test, released_test, contact_test, &state);
+    ok = detector_probe (usb, cancel, &error, suspend_test, handoff, contact_test, &state);
   else
     ok = !strcmp (mode, "touch") ? touch_probe (usb, cancel, &error) : interrupt_probe (usb, cancel, &error, FALSE);
 out:

@@ -81,7 +81,7 @@ class RunnerPolicy(unittest.TestCase):
 
     def test_suspend_opt_in_and_wake_guards(self):
         self.assertEqual(self.invoke(permit=True)[0], 2)
-        for mode in ("detector-suspend", "detector-suspend-released"):
+        for mode in ("detector-suspend", "detector-suspend-released", "detector-suspend-unclaimed"):
             self.assertEqual(self.invoke(mode=mode)[0], 2)
             for arguments in ({"uid": 0}, {"status": 0}, {"wake_status": 3},
                               {"wake_error": ValueError("Wake disabled")}, {"wake_error": OSError("Unreadable metadata")}):
