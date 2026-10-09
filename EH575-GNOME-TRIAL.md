@@ -1,11 +1,11 @@
-# Reversible EH575 GNOME trial (not yet installed)
+# Reversible EH575 GNOME trial
 
 This is an experimental local trial, not an upstream-ready or security-certified
 authentication implementation. It can enable fingerprint login as well as GNOME
 unlock; it is not a lock-screen-only policy. Password authentication must remain
 available. Spoof/liveness resistance and population false-accept risk are unknown.
 
-## Evidence and remaining gate
+## Evidence and local deployment status
 
 On 2026-10-09 real fprintd completed a fresh 15-touch enrollment, matched three
 enrolled-finger trials, rejected three completed non-enrolled-finger trials, and
@@ -32,11 +32,46 @@ stock client, releases BEFORE simulated wake and successfully reclaims in the
 SAME daemon. Native worker and generic async-close/resume race tests also pass.
 Do NOT install the old `de8e9eab` package; it predates this fix.
 
-Still required before installation: verify with a real finger after those checks,
-and repeat physical sleep/resume while ONE private daemon stays running, including
-sleep DURING an active verification. A separate session started after wake does
-not test that lifecycle. This harness does not test real system PolicyKit, service
-hardening or GNOME password fallback. The system trial checks those separately.
+The user then completed repeated PHYSICAL same-daemon sleep/resume tests with the
+fix on 2026-10-09, including interruption while awaiting a finger and after image
+capture. Interrupted scans returned an error, without release/open errors. Three
+subsequent enrolled-finger scans matched; a separate post-resume non-enrolled
+finger scan rejected. Both sessions exited cleanly. These are small functional
+checks, not security certification or population false-accept measurements.
+
+With explicit user approval, the user installed
+`libfprint-eh575-experimental` version `0.1+git.4ab3b17e0b90` on the development
+laptop. Apt completed installation of the trial plus 16 runtime/dependency
+packages, with no upgrades or removals. Dependency setup also selected Ubuntu's
+OpenBLAS providers for the system BLAS/LAPACK alternatives; the trial did not
+independently edit those alternatives or run autoremove.
+
+Post-install read-only checks confirmed:
+
+- Stock system fprintd is active and discovers ONE native EH575 press device with
+  15 enrollment stages on the REAL system bus, not the private test bus.
+- The service selects `/opt/eh575-libfprint/lib` through the package-owned drop-in.
+  ProtectSystem=strict, ProtectHome, PrivateTmp, MemoryDenyWriteExecute and
+  NoNewPrivileges remain enabled; StateDirectory=fprint is mode 0700.
+- Deployment directories/library/drop-in are root-owned and not user-writable.
+  The installed library SHA-256 matches the package manifest:
+  `0bc5d3f24ffd1185b9cb325e3473c50816b504c0ef9035311dcae33f388308fb`.
+  Its ELF has no RPATH/RUNPATH or sanitizer dependency.
+- Checksums of common-auth, gdm-password, gdm-fingerprint and the stock fprintd
+  executable match the pre-install baseline. Distribution libfprint is retained.
+- There is NO system enrollment yet; no private template was copied.
+
+Reading the root daemon's `/proc/PID/maps` required an interactive sudo password,
+so direct mapped-path inspection was not completed. Native device discovery,
+service configuration and installed artifact identity were checked independently.
+Real system enrollment/verification, enrollment PolicyKit, GNOME lock/password
+fallback and system-service sleep recovery remain UNTESTED. Do those next; do not
+treat successful private tests as proof that the GNOME trial is complete.
+
+For another installation, repeat the physical same-daemon lifecycle and
+wrong-finger gates BEFORE installation. A separate session started after wake
+does not test that lifecycle. The private harness does not test real system
+PolicyKit, service hardening or GNOME password fallback.
 
 ## Physical sleep/resume without changing authentication
 

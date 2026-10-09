@@ -261,14 +261,21 @@ commit `b54a007ccf58ac0ae074c7151b223f35cbd17306`. No upstream source patch is
 needed for this test. Full upstream fprintd tests and real GNOME deployment remain
 separate work.
 
-The next, separately approved system trial is described in
+The separately approved system trial is described in
 [EH575-GNOME-TRIAL.md](EH575-GNOME-TRIAL.md). Its package builder prepares a
 root-owned service-scoped override and rollback, but does NOT install it.
 Private cancellation/disconnect passed on 2026-10-09. Physical sleep during
 verification exposed the release-before-resume bug; the strengthened simulated
 stock-client release/reclaim test passes with the core cleanup fix. Physical
-sleep with that fix and actual GNOME behavior still need testing. Do not install
-the old `de8e9eab` trial artifact. System authentication remains unchanged.
+sleep with that fix passed in the SAME daemon, including interrupted capture and
+post-resume wrong-finger rejection. The user approved and installed the
+`4ab3b17e` trial package on the development laptop. Real system fprintd now
+discovers the native press device with 15 enrollment stages; its existing
+hardening and PAM/daemon file checksums were checked and remain unchanged.
+System library selection HAS changed; private templates were not copied.
+There is no system enrollment yet. Actual system enrollment/verification,
+GNOME lock/password fallback and system-service sleep recovery still need
+testing. Do not install the old `de8e9eab` trial artifact.
 
 ### Default stationary image driver
 
