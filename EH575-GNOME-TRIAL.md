@@ -283,8 +283,33 @@ stop for freshly validated current reader/hub paths. Restoration failures retain
 an inactive journal and are reported; a reboot clears transient settings. Inspect
 `journalctl -b -u eh575-wakeup.service -u systemd-suspend.service` on failure.
 If touch does not wake, disable the trial: sensor-side wake arming remains an
-open protocol investigation. No hardware wake-on-touch result has been established
-for this new trial; it does not promise hibernation or powered-off wake.
+open protocol investigation. This trial does not promise hibernation or powered-off
+wake.
+
+On 2026-10-09, the owner subsequently performed two explicit `systemctl suspend`
+trials. The journal records real s2idle entry/exit at 13:53:13–13:53:57 and
+13:54:27–13:54:53 local time. Neither woke on finger contact. Reader and hub
+permission had been verified enabled before the first trial; the opt-in service
+remained active, and no pre-sleep hook error was reported. The second resume
+disconnected/re-enumerated the reader. The last wake IRQ was 7 (`pinctrl_amd`),
+which is not enough to identify an individual GPIO source. A post-resume disabled
+reader attribute is consistent with libfprint's normal discovery/resume policy,
+not proof of its value during sleep. These results establish failure of the
+current permission-only setup on this laptop, not impossibility of hardware wake.
+
+The next package logs `EH575 sleep snapshot:` JSON in the system suspend journal:
+verified pre-sleep USB permission and read-only post-resume USB/platform wake
+settings, runtime power state, available wake counters, last IRQ and clock values.
+It runs only with a valid active opt-in journal. Post never reapplies permission.
+No raw USB, fingerprint, serial number or template is logged. Snapshots are taken
+inside our hook, not atomically at the kernel sleep boundary; other hooks can run
+in parallel. Firmware wake arming remains unimplemented. To inspect a fresh trial:
+
+```sh
+journalctl -b -u systemd-suspend.service --no-pager
+```
+
+See doc/egis0575-wake-research.md for static-analysis evidence and remaining gaps.
 
 ## Rollback
 

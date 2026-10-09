@@ -92,10 +92,17 @@ idle/release semantics and behavior during real suspend before enabling a watche
 
 ## Evidence boundaries
 
+The owner's full physical run on 2026-10-09 reported zero packets on both interrupt
+endpoints in all phases, both before and after known initialization. Image polling
+successfully detected CONTACT and RELEASE. This establishes an awake polling lead,
+not a hardware interrupt or low-power wake mode. Two subsequent explicit s2idle
+trials did not wake on touch; see EH575-GNOME-TRIAL.md. Static wake-mode research
+and the new pre/post sleep metadata are described in doc/egis0575-wake-research.md.
+
 The real revision-1072 reader passed the `open` probe: discovery, descriptor
 checks, exclusive claim, release and close. Ridge and default-image builds passed
 their selected regression suites; selected ridge tests also passed ASan/UBSan and
-leak checks. No physical touch/interrupt or wake result has been established yet.
+leak checks. These automated checks do not reproduce the physical touch trial.
 
 Synthetic tests cover bounded event statistics, brightness-only/background-texture
 rejection, contact/clipping gates and runner safeguards. They do not exercise a

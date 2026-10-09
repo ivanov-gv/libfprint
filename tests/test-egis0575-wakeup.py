@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: LGPL-2.1-or-later
 """Synthetic sysfs tests only: never change the host's wake or sleep state."""
 import importlib.util
+from contextlib import redirect_stdout
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -73,6 +75,73 @@ class WakePolicy(unittest.TestCase):
         wake.enable(self.sys, self.state, reapply=True)
         self.assertEqual(self.value(self.reader), "disabled")
         self.assertFalse((self.state / "state.json").exists())
+
+    def test_sleep_snapshots_verify_pre_and_never_rearm_post(self):
+        (self.sys / "power").mkdir()
+        (self.sys / "power/mem_sleep").write_text("[s2idle]\n")
+        (self.sys / "power/pm_wakeup_irq").write_text("7\n")
+        (self.reader / "power/runtime_status").write_text("suspended\n")
+        self.enable()
+        original = (self.state / "state.json").read_bytes()
+        (self.reader / "power/wakeup").write_text("disabled\n")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            wake.sleep_observation("pre", self.sys, self.state)
+        snapshot = json.loads(output.getvalue().split(": ", 1)[1])
+        self.assertEqual(snapshot["phase"], "pre")
+        self.assertTrue(all(item["wakeup"] == "enabled" for item in snapshot["devices"]))
+        self.assertEqual(snapshot["devices"][0]["runtime_status"], "suspended")
+        self.assertEqual(snapshot["mem_sleep"], "[s2idle]")
+        self.assertEqual(snapshot["last_wakeup_irq"], "7")
+        self.assertEqual(snapshot["platform"], [{"node": self.controller.name, "wakeup": "enabled"}])
+        self.assertEqual((self.state / "state.json").read_bytes(), original)
+        (self.reader / "power/wakeup").write_text("disabled\n")
+        output = io.StringIO()
+        with redirect_stdout(output):
+            wake.sleep_observation("post", self.sys, self.state)
+        snapshot = json.loads(output.getvalue().split(": ", 1)[1])
+        self.assertEqual(snapshot["phase"], "post")
+        self.assertEqual(snapshot["devices"][0]["wakeup"], "disabled")
+        self.assertEqual(self.value(self.reader), "disabled")
+        self.assertEqual((self.state / "state.json").read_bytes(), original)
+        self.assertNotIn("serial", output.getvalue())
+
+    def test_sleep_snapshot_without_active_opt_in_does_nothing(self):
+        for phase in ("pre", "post"):
+            output = io.StringIO()
+            with redirect_stdout(output):
+                wake.sleep_observation(phase, self.sys, self.state)
+            self.assertEqual(output.getvalue(), "")
+            self.assertEqual(self.value(self.reader), "disabled")
+        self.enable()
+        wake.save(self.state, wake.load(self.state)[0], active=False)
+        with redirect_stdout(io.StringIO()) as output:
+            wake.sleep_observation("pre", self.sys, self.state)
+        self.assertEqual(output.getvalue(), "")
+        with self.assertRaises(ValueError):
+            wake.sleep_observation("invalid", self.sys, self.state)
+
+    def test_sleep_snapshot_does_not_touch_usb_on_missing_platform_permission(self):
+        self.enable()
+        (self.reader / "power/wakeup").write_text("disabled\n")
+        (self.controller / "power/wakeup").write_text("disabled\n")
+        with redirect_stdout(io.StringIO()) as output, self.assertRaises(ValueError):
+            wake.sleep_observation("pre", self.sys, self.state)
+        self.assertEqual(output.getvalue(), "")
+        self.assertEqual(self.value(self.reader), "disabled")
+
+    def test_empty_or_malformed_metadata_is_unavailable_not_zero(self):
+        (self.reader / "power/wakeup_count").write_text("\n")
+        (self.reader / "power/control").write_text("auto\nextra\n")
+        (self.reader / "power/persist").write_text("x" * 129)
+        (self.reader / "serial").write_text("private synthetic serial")
+        snapshot = wake.observation(self.sys)
+        reader = snapshot["devices"][0]
+        self.assertIsNone(reader["wakeup_count"])
+        self.assertIsNone(reader["control"])
+        self.assertIsNone(reader["persist"])
+        self.assertIsNone(snapshot["last_wakeup_irq"])
+        self.assertNotIn("private synthetic serial", json.dumps(snapshot))
 
     def test_revision_mismatch_does_not_change_wake(self):
         (self.reader / "bcdDevice").write_text("9999\n")

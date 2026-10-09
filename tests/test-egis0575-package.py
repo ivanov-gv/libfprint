@@ -83,7 +83,9 @@ class PackagePolicy(unittest.TestCase):
             hook = (payload / package.WAKE_HOOK.relative_to("/")).read_text()
             self.assertIn('[ "$1" = pre ]', hook)
             self.assertIn('/run/eh575-wakeup/state.json', hook)
-            self.assertIn('eh575-wakeup reapply', hook)
+            self.assertIn('eh575-wakeup sleep-pre', hook)
+            self.assertIn('eh575-wakeup sleep-post', hook)
+            self.assertIn('[ "$1" = post ]', hook)
             self.assertNotIn("systemctl enable", (payload / "DEBIAN/postinst").read_text())
             self.assertIn("disable --now eh575-wakeup.service", (payload / "DEBIAN/prerm").read_text())
             for path in (package.WAKE_HELPER, package.WAKE_HOOK):

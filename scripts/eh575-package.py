@@ -60,6 +60,8 @@ Rollback wake only: sudo systemctl disable --now eh575-wakeup.service
 This enables USB wake only on revision 1072 and its hub path, never PCI/platform
 wake policy. Other devices on the same hub may become able to wake the laptop.
 The sleep hook reapplies permission after libfprint's normal policy resets.
+While opted in, it logs pre/post sleep power metadata in systemd-suspend.service's
+journal. Post only observes; it never rearms. No serials, images or USB data logged.
 Original values are journaled privately in /run and restored when stopped;
 reboot clears transient policy. No undocumented sensor commands are sent.
 If touching does not wake, sensor-side wake arming is still unimplemented:
@@ -178,8 +180,11 @@ WantedBy=multi-user.target
     write(root, WAKE_HOOK, """#!/bin/sh
 # fprintd quiesces through logind before systemd's pre-sleep hooks run.
 # No snapshot means no opt-in. A hook failure is logged, not a sleep inhibitor.
+# Log verified pre-sleep permission and read-only post-resume metadata.
 if [ "$1" = pre ] && [ -f /run/eh575-wakeup/state.json ]; then
-    /usr/libexec/eh575-wakeup reapply
+    /usr/libexec/eh575-wakeup sleep-pre
+elif [ "$1" = post ] && [ -f /run/eh575-wakeup/state.json ]; then
+    /usr/libexec/eh575-wakeup sleep-post
 fi
 """, True)
     doc = Path("/usr/share/doc") / PACKAGE

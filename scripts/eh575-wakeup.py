@@ -10,6 +10,7 @@ from pathlib import Path
 import stat
 import sys
 import tempfile
+import time
 
 SYSFS = Path("/sys")
 STATE = Path("/run/eh575-wakeup")
@@ -176,9 +177,58 @@ def _disable(sysfs, directory):
     (directory / "state.json").unlink()
 
 
+def observation(sysfs=SYSFS):
+    """Read metadata only. No USB opens, serials, packets or sensor commands."""
+    readers, nodes = targets(sysfs)
+    result = {"devices": [], "platform": []}
+
+    def optional(path):
+        try:
+            value = read(path)
+        except OSError:
+            return None
+        return value if value and len(value) <= 128 and value.isascii() and not any(ord(c) < 32 for c in value) else None
+
+    for node, wake in nodes.items():
+        item = {"node": node.name, "role": "reader" if node in readers else "hub", "wakeup": wake}
+        for key in ("runtime_status", "control", "persist", "wakeup_count", "wakeup_active_count", "wakeup_abort_count"):
+            item[key] = optional(node / "power" / key)
+        result["devices"].append(item)
+    platform = set()
+    for reader in readers:
+        for parent in reader.parents:
+            if parent == (sysfs / "devices").resolve(strict=True):
+                break
+            if parent not in nodes and (parent / "power/wakeup").is_file():
+                platform.add(parent)
+    for node in sorted(platform):
+        result["platform"].append({"node": node.name, "wakeup": optional(node / "power/wakeup")})
+    result["mem_sleep"] = optional(sysfs / "power/mem_sleep")
+    result["last_wakeup_irq"] = optional(sysfs / "power/pm_wakeup_irq")
+    return result
+
+
+def sleep_observation(phase, sysfs=SYSFS, directory=STATE):
+    """Journal an opted-in pre/post snapshot; only pre reapplies USB policy."""
+    if phase not in ("pre", "post"):
+        raise ValueError("Invalid sleep phase")
+    with locked(directory):
+        _, active = load(directory)
+        if not active:
+            return  # Inactive restore journals must not rearm or log a trial.
+        if phase == "pre":
+            _enable(sysfs, directory, reapply=True)
+        snapshot = observation(sysfs)
+        snapshot.update(phase=phase, opt_in=True, monotonic_ns=time.monotonic_ns(),
+                        boottime_ns=time.clock_gettime_ns(time.CLOCK_BOOTTIME))
+        if phase == "pre" and any(item["wakeup"] != "enabled" for item in snapshot["devices"]):
+            raise ValueError("USB wake permission changed before the pre-sleep snapshot")
+        print("EH575 sleep snapshot: " + json.dumps(snapshot, sort_keys=True), flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("status", "enable", "reapply", "disable"))
+    parser.add_argument("action", choices=("status", "enable", "reapply", "disable", "sleep-pre", "sleep-post"))
     args = parser.parse_args()
     try:
         if args.action == "status":
@@ -190,7 +240,9 @@ def main():
         else:
             if os.geteuid() != 0:
                 parser.error("Wake changes require root; status is read-only")
-            if args.action == "disable":
+            if args.action.startswith("sleep-"):
+                sleep_observation(args.action.removeprefix("sleep-"))
+            elif args.action == "disable":
                 disable()
             else:
                 enable(reapply=args.action == "reapply")
