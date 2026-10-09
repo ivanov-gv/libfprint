@@ -1,9 +1,11 @@
 # Linux-only EH575 touch/wake research
 
 Target: `1c7a:0575`, revision `1072`. Both touch-to-wake from real suspend and
-touch-to-activate a blanked GNOME lock screen are requirements. Neither is claimed
-working by these diagnostics. The current package changes USB wake permission
-only; it does not know how to arm the sensor's low-power touch detector.
+touch-to-activate a blanked GNOME lock screen are requirements. The owner confirmed
+real suspend wake by touch in the isolated, held-claim detector experiment on
+2026-10-09. Automatic suspend arming and awake blank-screen integration are not
+implemented. The current package changes USB wake permission only; it does not
+arm the sensor's low-power touch detector.
 
 An uninstalled, explicitly selected `detector` probe now measures and arms a
 cross-checked volatile detector path for **awake-only** observation. It is not a
@@ -37,8 +39,9 @@ and must stop before suspend unless a hardware wake mode is actually established
 It must preserve password fallback, attempt limits and system PolicyKit. No
 infinite authentication retry loop, unlock D-Bus shortcut, synthetic password,
 disabled sleep or arbitrary keyboard injection is proposed. This integration is
-not implemented yet: an isolated contact result is needed before choosing a safe
-ownership/event design. A companion GNOME component may be necessary; that would
+not implemented yet: contact and isolated suspend wake are now confirmed, but
+safe USB ownership/event handoff still needs testing. A companion GNOME component
+may be necessary; that would
 remain separate from the upstream libfprint driver contribution.
 
 ## Isolated physical tests
@@ -61,8 +64,15 @@ python3 scripts/eh575-touch.py detector \
   --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root
 ```
 
-Keep the reader empty from the start. This mode first requires three empty-image
-quality checks. It then uses volatile detector calibration (`0x34`/`0x35`), reads
+Keep the reader empty from the start. This mode first discards one settling image,
+then requires three empty-image quality checks at usable exposure. If necessary,
+it searches the installed capture driver's characterized DC range (0–63), with
+at most seven exposure attempts and a new settling frame after each setting.
+Texture/contact or acquisition failures abort; image/empty-quality thresholds
+are unchanged. Failed checks report mean, texture, clipping and DC rather than
+assuming poor exposure means a finger is present. This addresses a possible cause
+of the owner's repeated pre-arm rejections; repeat hardware testing is still
+needed to confirm improvement. It then uses volatile detector calibration (`0x34`/`0x35`), reads
 the measured analogue values and adjusts the detection DC using sensor statistics.
 The threshold is the measured mean plus the OEM's margin of 80, not the values
 from another person's USB trace. Zero DC, invalid statistics, busy timeout and
@@ -135,7 +145,33 @@ cleanup. Clock evidence distinguishes host sleep from an awake wait but **does n
 identify what woke the laptop**: report whether touch worked or fallback wake was
 needed, the printed output, normal verification afterward, and optionally the
 fresh `journalctl -b -u systemd-suspend.service` cycle. This is not an unattended
-GNOME integration and does not establish wake-on-touch until physically verified.
+GNOME integration. The owner physically confirmed touch wake in one held-claim
+trial; this does not establish reliable automatic integration across boot/resume.
+
+### Release-before-suspend handoff experiment
+
+The successful trial above retained its USB claim. A future sleep hook must not
+leave the reader unavailable to fprintd after resume. Test whether detector state
+and wake survive releasing the interface and closing the USB handle:
+
+```sh
+sudo systemctl start eh575-wakeup.service
+sudo /usr/libexec/eh575-wakeup reapply
+python3 scripts/eh575-touch.py detector-suspend-released --allow-suspend-test \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root
+```
+
+Use the same empty-reader, manual suspend, touch and fallback procedure above.
+This variant prints `USB interface released and handle closed with detector armed`
+before `SUSPEND TEST READY`. Do not run fingerprint clients until the test ends:
+they could overwrite detector state and invalidate the experiment. The process
+holds no USB handle during the wait. On resume, timeout or cancellation, it tries
+to reopen and exclusively claim the same device, then restore capture. It never
+steals an interface if another client claimed it, stops fprintd or resets USB. A
+disconnect/reset or competing claim can prevent recovery, which is reported as a
+failed restore; close the probe and check normal fprintd before another suspend.
+Uncatchable termination cannot guarantee restoration. This variant is not yet
+physically validated, installed, or an automatic wake service.
 
 Run the modes one at a time:
 
@@ -180,7 +216,7 @@ by these probes. Afterward confirm normal `fprintd-verify` still works.
 Share only the printed aggregate output. No raw USB trace or fingerprint dump is
 needed for this first test. If the interrupt modes stay silent but the image mode
 detects contact/release, awake screen-wake polling is a possible prototype route;
-hardware low-power wake remains a separate unresolved protocol investigation.
+automatic low-power arming/handoff remains a separate investigation.
 If touch-specific interrupts appear, a follow-up must establish their framing,
 idle/release semantics and behavior during real suspend before enabling a watcher.
 
@@ -198,7 +234,18 @@ and threshold 180. Empty register-`0x01` status was zero; touch changed it to `0
 which stayed latched after lift. Both interrupt endpoints remained silent in all
 three phases. Detector exit/capture initialization succeeded, followed by a real
 normal `fprintd-verify` match. This proves the measured detector responds on this
-unit and ordinary matching recovers, not that it signals host wake in suspend.
+unit and ordinary matching recovers; alone it does not establish suspend wake.
+
+In the owner's subsequent held-claim detector-suspend trial, measured reference
+was 3, DC 11/20, mean 107 and threshold 187. Clocks recorded approximately 3.29
+seconds asleep, detector exit/capture initialization succeeded, and the owner
+explicitly confirmed that touching the sensor woke the laptop. Normal fprintd
+matched afterward. The 15:19:20–15:19:24 CEST system-suspend snapshots recorded
+enabled reader/root-hub wake permission, increased reader/root-hub active counts
+and last wake IRQ 9 rather than 7. These metadata support the observation but do
+not independently identify the wake source. This is one successful real-suspend
+test on this laptop, not proof of release-before-suspend retention, repeated-cycle
+reliability, awake blank-screen wake, or automatic GNOME handoff.
 
 The real revision-1072 reader passed the `open` probe: discovery, descriptor
 checks, exclusive claim, release and close. Ridge and default-image builds passed
@@ -207,12 +254,16 @@ leak checks. These automated checks do not reproduce the physical touch trial.
 
 Synthetic tests cover bounded event statistics, brightness-only/background-texture
 rejection, contact/clipping gates and runner safeguards. They do not exercise a
-physical reader, prove exclusive-claim races are harmless, demonstrate wake during
-suspend, establish battery impact, or test a GNOME extension. Do not publish these
+physical reader, prove exclusive-claim races are harmless, establish wake
+reliability or battery impact, or test a GNOME extension. Do not publish these
 tools as completed wake-on-touch support.
 
 Detector synthetic tests additionally cover trace-derived command ordering,
 measured thresholds, zero/underflow rejection, invalid statistics, bounded busy
 polls, failure/malformed-reply injection at every calibration step, and restoration
 after partial entry/calibration. They also reject failed restoration at every
-transfer. These validate software control flow, not physical touch or USB wake.
+transfer. Exposure tests cover all synthetic target DC values, a stale settling
+frame, contact-texture rejection, unattainable exposure and read/capture/write
+failures. Runner tests cover both suspend variants' explicit opt-in, inactive
+fprintd and wake-permission guards. These validate software control flow, not
+physical touch, USB wake or release/reclaim behavior on hardware.

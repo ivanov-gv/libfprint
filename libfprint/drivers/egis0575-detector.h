@@ -7,6 +7,13 @@
 #include "egis0575.h"
 
 typedef int (*Eh575DetectorIO) (void *context, const Eh575Command *cmd, uint8_t *reply, size_t *length);
+typedef int (*Eh575DetectorCapture) (void *context, uint8_t *frame);
+
+typedef struct
+{
+  unsigned int dc, attempts;
+  double mean, texture, clipped;
+} Eh575EmptyCheck;
 
 typedef struct
 {
@@ -40,6 +47,66 @@ eh575_detector_write (Eh575DetectorIO io, void *context, uint8_t reg, uint8_t va
   Eh575Command cmd = {7, {'E', 'G', 'I', 'S', 0x61, reg, value}};
   uint8_t reply[64];
   return eh575_detector_io (io, context, &cmd, reply);
+}
+
+/* Match the installed capture calibration's characterized DC range and final
+ * quality gates. Discard one settling frame after each setting, then require
+ * three low-texture frames. Never calibrate detector parameters from a finger.
+ * A transport/capture failure or a textured frame aborts, without further writes.
+ */
+static inline int
+eh575_detector_empty (Eh575EmptyCheck *check, Eh575DetectorIO io, Eh575DetectorCapture capture, void *context)
+{
+  const Eh575Command read_dc = {7, {'E', 'G', 'I', 'S', 0x60, 0x0f, 0}};
+  uint8_t frame[EH575_FRAME_SIZE], reply[64];
+  int low = 0, high = 63, ok = 0;
+  memset (check, 0, sizeof *check);
+  if (!eh575_detector_io (io, context, &read_dc, reply) || reply[5] > 63)
+    goto out;
+  check->dc = reply[5];
+  for (check->attempts = 1; check->attempts <= 7; check->attempts++)
+    {
+      if (!capture (context, frame)) /* settling */
+        goto out;
+      check->mean = check->texture = check->clipped = 0;
+      int usable = 1;
+      for (unsigned int n = 0; n < 3; n++)
+        {
+          if (!capture (context, frame))
+            goto out;
+          double texture = eh575_deviation (frame, NULL);
+          if (texture > 18)
+            {
+              check->mean = eh575_mean (frame);
+              check->texture = texture;
+              check->clipped = eh575_clipped (frame);
+              goto out;
+            }
+          double mean = eh575_mean (frame), clipped = eh575_clipped (frame);
+          usable &= mean >= 96 && mean <= 160 && clipped <= .005;
+          check->mean += mean / 3;
+          check->texture = fmax (check->texture, texture);
+          check->clipped += clipped / 3;
+        }
+      if (usable)
+        {
+          ok = 1;
+          goto out;
+        }
+      if (check->mean < 128)
+        low = (int) check->dc + 1;
+      else
+        high = (int) check->dc - 1;
+      if (low > high || check->attempts == 7)
+        goto out;
+      check->dc = (low + high) / 2;
+      if (!eh575_detector_write (io, context, 0x0f, check->dc))
+        goto out;
+    }
+out:
+  memset (frame, 0, sizeof frame);
+  memset (reply, 0, sizeof reply);
+  return ok;
 }
 
 /* A bounded status wait. The USB backend also enforces a wall-clock deadline. */

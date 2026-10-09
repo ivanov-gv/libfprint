@@ -308,6 +308,13 @@ sample_clocks (uint64_t *boot, uint64_t *mono, GError **error)
   return TRUE;
 }
 
+static int
+detector_capture (void *context, uint8_t *frame)
+{
+  ProbeIO *io = context;
+  return capture (io->usb, frame, io->cancel, io->error);
+}
+
 static gboolean
 wait_for_suspend (GCancellable *cancel, GError **error)
 {
@@ -347,25 +354,26 @@ wait_for_suspend (GCancellable *cancel, GError **error)
 }
 
 static gboolean
-detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean suspend_test)
+detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean suspend_test,
+                gboolean released_test, gboolean *opened, gboolean *claimed)
 {
   ProbeIO io = {usb, cancel, error};
   Eh575Detector detector;
-  uint8_t frame[EH575_FRAME_SIZE];
+  Eh575EmptyCheck empty;
   gboolean ok = FALSE, changed = FALSE;
 
-  g_print ("Keep EMPTY: checking three idle frames before volatile detector calibration.\n");
-  for (guint n = 0; n < 3; n++)
+  g_print ("Keep EMPTY: settling and measuring usable exposure before volatile detector calibration.\n");
+  changed = TRUE; /* Recovery also covers interrupted/failed exposure writes. */
+  if (!eh575_detector_empty (&empty, detector_io, detector_capture, &io))
     {
-      if (!capture (usb, frame, cancel, error))
-        goto out;
-      if (!eh575_touch_idle (frame))
-        {
-          g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Reader is not empty at usable exposure; detector NOT armed");
-          goto out;
-        }
+      if (!*error)
+        g_set_error (error, G_IO_ERROR, G_IO_ERROR_FAILED,
+                     "Empty-reader check failed: mean=%.1f texture=%.1f clipped=%.3f at DC=%u; detector NOT armed. Keep empty and retry",
+                     empty.mean, empty.texture, empty.clipped, empty.dc);
+      goto out;
     }
-  changed = TRUE; /* Recovery is required even if the first setup transfer fails. */
+  g_print ("Empty reader ready: mean=%.1f texture=%.1f DC=%u (%u exposure checks).\n",
+           empty.mean, empty.texture, empty.dc, empty.attempts);
   if (!eh575_detector_calibrate (&detector, detector_io, &io))
     goto out;
   g_print ("Measured detector: reference=%u DC=%u/%u mean=%u threshold=%u.\n",
@@ -383,6 +391,20 @@ detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean 
           g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Touch already latched before suspend; detector test aborted. Leave empty and retry");
           goto out;
         }
+      if (released_test)
+        {
+          /* Deliberately leave the volatile detector armed, but relinquish the
+           * USB handle. This tests the handoff needed by a future sleep hook.
+           * Do not reset, detach a kernel driver or stop/steal from fprintd.
+           */
+          if (!g_usb_device_release_interface (usb, 0, 0, error))
+            goto out;
+          *claimed = FALSE;
+          if (!g_usb_device_close (usb, error))
+            goto out;
+          *opened = FALSE;
+          g_print ("USB interface released and handle closed with detector armed.\n");
+        }
       ok = wait_for_suspend (cancel, error);
     }
   else
@@ -391,7 +413,7 @@ detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean 
       ok = interrupt_probe (usb, cancel, error, TRUE);
     }
 out:
-  memset (frame, 0, sizeof frame);
+  memset (&empty, 0, sizeof empty);
   memset (&detector, 0, sizeof detector);
   if (!ok && !*error)
     g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Detector test failed; calibration/status bounds or cancellation prevented completion");
@@ -400,9 +422,20 @@ out:
       g_autoptr(GError) restore_error = NULL;
       ProbeIO recovery = {usb, NULL, &restore_error};
       deadline = g_get_monotonic_time () + 5000000;
-      if (!eh575_detector_restore (detector_io, &recovery))
+      gboolean access = TRUE;
+      if (!*opened)
         {
-          g_printerr ("Capture restoration FAILED: %s. Do not suspend; close the probe and test fprintd normally.\n",
+          access = g_usb_device_open (usb, &restore_error);
+          *opened = access;
+        }
+      if (access && !*claimed)
+        {
+          access = g_usb_device_claim_interface (usb, 0, 0, &restore_error);
+          *claimed = access;
+        }
+      if (!access || !eh575_detector_restore (detector_io, &recovery))
+        {
+          g_printerr ("Capture restoration FAILED: %s. No interface is stolen; close the probe and test fprintd normally before another suspend.\n",
                       restore_error ? restore_error->message : "unexpected status or busy timeout");
           ok = FALSE;
         }
@@ -416,13 +449,14 @@ int
 main (int argc, char **argv)
 {
   const char *mode = argc >= 2 ? argv[1] : "";
-  gboolean suspend_test = !strcmp (mode, "detector-suspend");
+  gboolean released_test = !strcmp (mode, "detector-suspend-released");
+  gboolean suspend_test = !strcmp (mode, "detector-suspend") || released_test;
   gboolean initialized = !strcmp (mode, "interrupt-initialized") || !strcmp (mode, "touch") || !strcmp (mode, "detector") || suspend_test;
 
   if ((suspend_test ? argc != 3 || strcmp (argv[2], "--allow-suspend-test") : argc != 2) ||
       (!initialized && strcmp (mode, "interrupt") && strcmp (mode, "open")) || geteuid () == 0)
     {
-      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch|detector OR detector-suspend --allow-suspend-test\n");
+      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch|detector OR detector-suspend[-released] --allow-suspend-test\n");
       return 2;
     }
   g_autoptr(GError) error = NULL;
@@ -476,7 +510,7 @@ main (int argc, char **argv)
           goto out;
     }
   if (!strcmp (mode, "detector") || suspend_test)
-    ok = detector_probe (usb, cancel, &error, suspend_test);
+    ok = detector_probe (usb, cancel, &error, suspend_test, released_test, &opened, &claimed);
   else
     ok = !strcmp (mode, "touch") ? touch_probe (usb, cancel, &error) : interrupt_probe (usb, cancel, &error, FALSE);
 out:

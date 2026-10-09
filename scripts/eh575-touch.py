@@ -21,14 +21,14 @@ def wake_ready():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch", "detector", "detector-suspend"))
-    parser.add_argument("--allow-suspend-test", action="store_true", help="explicitly permit the manual detector-suspend experiment")
+    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch", "detector", "detector-suspend", "detector-suspend-released"))
+    parser.add_argument("--allow-suspend-test", action="store_true", help="explicitly permit either manual detector-suspend experiment")
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--deps", type=Path)
     args = parser.parse_args()
-    suspend_test = args.mode == "detector-suspend"
+    suspend_test = args.mode in ("detector-suspend", "detector-suspend-released")
     if args.allow_suspend_test != suspend_test:
-        parser.error("detector-suspend requires --allow-suspend-test; do not use that flag with awake modes")
+        parser.error("Suspend modes require --allow-suspend-test; do not use that flag with awake modes")
     if os.geteuid() == 0:
         parser.error("Run without sudo, from an unlocked local terminal")
     build = args.build.resolve(strict=True)

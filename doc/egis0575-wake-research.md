@@ -189,10 +189,10 @@ source. Later live reader permission was disabled, which must not be mistaken
 for its recorded pre/post state.
 
 The register transport, default-variant layout, calibration margin and capture
-restoration sequence are now cross-checked. Still missing are physical validation
-of those paths on this unit, event transport and actual idle/suspend sequencing.
-Those remaining pieces prevent treating this as a wake recipe or automatically
-arming the installed reader during system suspend.
+restoration sequence are cross-checked. Physical awake detector response and one
+held-claim suspend wake have now been owner-confirmed below. Event transport and
+unattended idle/suspend ownership sequencing remain incomplete; the installed
+reader is not automatically armed during system suspend.
 
 An uninstalled `eh575-touch.py detector` experiment now implements the
 cross-checked entry/exit with freshly measured statistics, a strict tested-device
@@ -211,7 +211,21 @@ waiting for a manual suspend, and restores after clock evidence of resume. It
 never suspends automatically, writes wake policy or installs a watcher. The
 existing opt-in permission service must already be active. See
 EH575-TOUCH-RESEARCH.md for prerequisites, fallback and evidence boundaries.
-Physical wake source, detector-state retention through suspend and behavior after
-USB reset remain unverified. The full wake goal remains active and unachieved.
+In the 2026-10-09 15:19:20–15:19:24 CEST cycle, the owner explicitly confirmed that
+touch woke the laptop. The isolated detector measured reference 3, DC 11/20,
+mean 107 and threshold 187; clock evidence indicated 3.29 seconds asleep. Capture
+restoration succeeded and normal fprintd matched afterward. Reader/root-hub wake
+permissions remained enabled, active counts increased and last wake IRQ changed
+to 9. The metadata are supporting evidence, not unique wake-source identification.
+Thus detector state survived one real suspend while the probe held the USB claim.
+
+The new `detector-suspend-released` variant tests whether that state and wake also
+survive releasing/closing USB before suspend, then reacquires without stealing for
+bounded capture restoration. It is not physically validated or installed. The
+probe now settles/checks exposure with the already-characterized 0–63 DC range
+before detector calibration; contact/quality gates and restoration remain intact.
+Behavior after USB reset, repeated wake reliability, release/reclaim handoff and
+awake blank-screen integration remain unverified. The full wake goal remains
+active and unachieved.
 No package should silently arm wake, alter PCI/ACPI policy, keep the CPU awake,
 poll during suspend, or treat a contact event as authentication.

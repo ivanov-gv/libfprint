@@ -10,6 +10,8 @@ typedef struct
   unsigned int used, fail_at, malformed_at, polls;
   uint8_t dc, mean;
   int busy, invalid_stats;
+  int image_dc, target_dc, fail_capture, textured, stale_first, impossible, unstable;
+  unsigned int images;
 } Fake;
 
 static int
@@ -31,7 +33,11 @@ exchange (void *context, const Eh575Command *cmd, uint8_t *reply, size_t *length
     {
       fake->polls++;
       reply[5] = fake->busy ? 0x80 : 0;
+      if (reg == 0x0f)
+        reply[5] = fake->image_dc;
     }
+  if (op == 0x61 && reg == 0x0f)
+    fake->image_dc = cmd->data[6];
   if (op == 0x62 && reg == 0x0d)
     {
       reply[7] = 3;
@@ -155,6 +161,70 @@ sleep_evidence (void)
   g_assert_cmpuint (eh575_detector_sleep_elapsed (0, 0, UINT64_MAX, UINT64_MAX), ==, 0);
 }
 
+static int
+image (void *context, uint8_t *frame)
+{
+  Fake *fake = context;
+  fake->images++;
+  if ((int) fake->images == fake->fail_capture)
+    return 0;
+  int level = fake->impossible ? 40 : CLAMP (128 + 4 * (fake->image_dc - fake->target_dc), 5, 250);
+  if (fake->unstable)
+    level = fake->images % 4 == 2 ? 88 : fake->images % 4 == 3 ? 128 : 168;
+  int contrast = fake->textured || (fake->stale_first && fake->images == 1) ? 40 : 5;
+  for (guint n = 0; n < EH575_FRAME_SIZE; n++)
+    frame[n] = CLAMP (level + (n % 2 ? contrast : -contrast), 0, 255);
+  return 1;
+}
+
+static void
+empty_exposure (void)
+{
+  Eh575EmptyCheck check;
+  Fake fake = {.image_dc = 32, .target_dc = 32, .stale_first = 1};
+  g_assert_true (eh575_detector_empty (&check, exchange, image, &fake));
+  g_assert_cmpuint (fake.images, ==, 4);
+  g_assert_cmpuint (fake.used, ==, 1); /* No setting changes if already usable. */
+  for (int target = 0; target <= 63; target++)
+    {
+      fake = (Fake){.image_dc = 32, .target_dc = target};
+      g_assert_true (eh575_detector_empty (&check, exchange, image, &fake));
+      g_assert_cmpuint (check.attempts, <=, 7);
+      g_assert_cmpuint (check.dc, <=, 63);
+      g_assert_cmpfloat (check.mean, >=, 96);
+      g_assert_cmpfloat (check.mean, <=, 160);
+    }
+  fake = (Fake){.image_dc = 32, .target_dc = 32, .textured = 1};
+  g_assert_false (eh575_detector_empty (&check, exchange, image, &fake));
+  g_assert_cmpuint (fake.used, ==, 1); /* Never change DC on contact texture. */
+  fake = (Fake){.image_dc = 32, .impossible = 1};
+  g_assert_false (eh575_detector_empty (&check, exchange, image, &fake));
+  g_assert_cmpuint (fake.images, <=, 28);
+  fake = (Fake){.image_dc = 32, .unstable = 1};
+  g_assert_false (eh575_detector_empty (&check, exchange, image, &fake));
+  g_assert_cmpuint (fake.images, <=, 28); /* An average cannot hide bad frames. */
+  fake = (Fake){.image_dc = 32, .target_dc = 60};
+  g_assert_true (eh575_detector_empty (&check, exchange, image, &fake));
+  guint captures = fake.images, commands = fake.used;
+  for (guint bad = 1; bad <= captures; bad++)
+    {
+      fake = (Fake){.image_dc = 32, .target_dc = 60, .fail_capture = bad};
+      g_assert_false (eh575_detector_empty (&check, exchange, image, &fake));
+      g_assert_cmpuint (fake.images, ==, bad);
+    }
+  fake = (Fake){.image_dc = 64};
+  g_assert_false (eh575_detector_empty (&check, exchange, image, &fake));
+  g_assert_cmpuint (fake.images, ==, 0);
+  for (guint bad = 1; bad <= commands; bad++)
+    for (guint malformed = 0; malformed < 2; malformed++)
+      {
+        fake = (Fake){.image_dc = 32, .target_dc = 60,
+                      .fail_at = malformed ? 0 : bad, .malformed_at = malformed ? bad : 0};
+        g_assert_false (eh575_detector_empty (&check, exchange, image, &fake));
+        g_assert_cmpuint (fake.used, ==, bad);
+      }
+}
+
 int
 main (int argc, char **argv)
 {
@@ -165,5 +235,6 @@ main (int argc, char **argv)
   g_test_add_func ("/eh575/detector/failures", failures);
   g_test_add_func ("/eh575/detector/restore-failures", restore_failures);
   g_test_add_func ("/eh575/detector/sleep-evidence", sleep_evidence);
+  g_test_add_func ("/eh575/detector/empty-exposure", empty_exposure);
   return g_test_run ();
 }

@@ -69,14 +69,15 @@ class RunnerPolicy(unittest.TestCase):
         self.assertEqual({item.name for item in self.build.iterdir()}, {"meson-info", "tests"})
 
     def test_suspend_opt_in_and_wake_guards(self):
-        self.assertEqual(self.invoke(mode="detector-suspend")[0], 2)
         self.assertEqual(self.invoke(permit=True)[0], 2)
-        for arguments in ({"uid": 0}, {"status": 0}, {"wake_status": 3},
-                          {"wake_error": ValueError("Wake disabled")}, {"wake_error": OSError("Unreadable metadata")}):
-            self.assertEqual(self.invoke(mode="detector-suspend", permit=True, **arguments)[0], 2)
-        code, call = self.invoke(mode="detector-suspend", permit=True)
-        self.assertIsNone(code)
-        self.assertEqual(call.args[1], [str(self.build / "tests/eh575-touch-probe"), "detector-suspend", "--allow-suspend-test"])
+        for mode in ("detector-suspend", "detector-suspend-released"):
+            self.assertEqual(self.invoke(mode=mode)[0], 2)
+            for arguments in ({"uid": 0}, {"status": 0}, {"wake_status": 3},
+                              {"wake_error": ValueError("Wake disabled")}, {"wake_error": OSError("Unreadable metadata")}):
+                self.assertEqual(self.invoke(mode=mode, permit=True, **arguments)[0], 2)
+            code, call = self.invoke(mode=mode, permit=True)
+            self.assertIsNone(code)
+            self.assertEqual(call.args[1], [str(self.build / "tests/eh575-touch-probe"), mode, "--allow-suspend-test"])
 
 
 if __name__ == "__main__":
