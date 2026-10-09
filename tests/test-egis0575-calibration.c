@@ -7,9 +7,9 @@
 static Eh575CalibrationIdentity
 identity (void)
 {
-  Eh575CalibrationIdentity result = { .bus = 1, .address = 2, .monotonic = 10000000, .suspended = 5000000 };
+  Eh575CalibrationIdentity result;
 
-  memcpy (result.boot, "01234567-89ab-cdef-0123-456789abcdef", 37);
+  g_assert_true (eh575_calibration_identity (&result, "usb:02:00:03:01"));
   return result;
 }
 
@@ -31,29 +31,22 @@ test_identity (void)
   Eh575Calibration cache;
 
   record (&cache, &id);
-  changed = id;
-  changed.monotonic += EH575_CALIBRATION_MAX_AGE;
+  /* A fresh identity instance (new daemon/boot) has no boot, sleep, USB
+   * address or age dependency. The same physical port resolves identically.
+   */
+  g_assert_true (eh575_calibration_identity (&changed, "usb:02:00:03:01"));
   g_assert_true (eh575_calibration_compatible (&cache, &changed));
-  changed.monotonic++;
+  g_assert_true (changed.persistent);
+  g_assert_true (eh575_calibration_identity (&changed, "usb:02:00:03:02"));
   g_assert_false (eh575_calibration_compatible (&cache, &changed));
-  changed = id;
-  changed.monotonic--;
+  g_assert_true (eh575_calibration_identity (&changed, NULL));
+  g_assert_false (changed.persistent);
   g_assert_false (eh575_calibration_compatible (&cache, &changed));
-  changed = id;
-  changed.suspended += 1000000;
-  g_assert_false (eh575_calibration_compatible (&cache, &changed));
-  changed = id;
-  changed.boot[0] = 'f';
-  g_assert_false (eh575_calibration_compatible (&cache, &changed));
-  changed = id;
-  changed.address++;
-  g_assert_false (eh575_calibration_compatible (&cache, &changed));
-  changed = id;
-  changed.bus++;
-  g_assert_false (eh575_calibration_compatible (&cache, &changed));
-  g_assert_true (eh575_calibration_identity (&changed));
-  g_assert_true (g_uuid_string_is_valid (changed.boot));
-  g_assert_cmpint (changed.monotonic, >, 0);
+  g_assert_false (eh575_calibration_identity (&changed, ""));
+  char long_id[257];
+  memset (long_id, 'a', 256);
+  long_id[256] = 0;
+  g_assert_false (eh575_calibration_identity (&changed, long_id));
 }
 
 static void
@@ -73,6 +66,12 @@ test_content (void)
   g_assert_false (eh575_calibration_compatible (&cache, &id));
   record (&cache, &id);
   cache.bytes[79] = 1;
+  g_assert_false (eh575_calibration_compatible (&cache, &id));
+  record (&cache, &id);
+  cache.bytes[6] = '1'; /* Previous epoch-bound cache format is not imported. */
+  g_assert_false (eh575_calibration_compatible (&cache, &id));
+  record (&cache, &id);
+  cache.bytes[80] ^= 1; /* Even an otherwise usable changed background fails checksum. */
   g_assert_false (eh575_calibration_compatible (&cache, &id));
   record (&cache, &id);
   memset (cache.bytes + 80, 0, EH575_FRAME_SIZE);
@@ -99,10 +98,9 @@ test_files (void)
   eh575_calibration_store (&saved, &id, directory);
   g_assert_true (eh575_calibration_load (&loaded, &id, directory));
   g_assert_cmpmem (saved.bytes, sizeof saved.bytes, loaded.bytes, sizeof loaded.bytes);
-  /* Loading never refreshes the age. */
-  id.monotonic += EH575_CALIBRATION_MAX_AGE + 1;
-  g_assert_false (eh575_calibration_load (&loaded, &id, directory));
+  /* New identity object/process resolves the same on-disk profile. */
   id = identity ();
+  g_assert_true (eh575_calibration_load (&loaded, &id, directory));
   g_assert_cmpint (g_chmod (path, 0644), ==, 0);
   g_assert_false (eh575_calibration_load (&loaded, &id, directory));
   g_assert_cmpint (g_chmod (path, 0600), ==, 0);
@@ -131,12 +129,39 @@ test_files (void)
   g_assert_cmpint (g_rmdir (directory), ==, 0);
 }
 
+static void
+test_frames (void)
+{
+  Eh575CalibrationIdentity id = identity ();
+  Eh575Calibration cache;
+  guint8 frame[EH575_FRAME_SIZE];
+
+  record (&cache, &id);
+  memcpy (frame, cache.bytes + 80, sizeof frame);
+  g_assert_cmpint (eh575_calibration_evaluate (&cache, frame), ==, EH575_CALIBRATION_IDLE);
+  for (guint i = 0; i < sizeof frame; i++)
+    frame[i] += 5;
+  g_assert_cmpint (eh575_calibration_evaluate (&cache, frame), ==, EH575_CALIBRATION_IDLE);
+  for (guint i = 0; i < sizeof frame; i++)
+    frame[i] += 20;
+  g_assert_cmpint (eh575_calibration_evaluate (&cache, frame), ==, EH575_CALIBRATION_REMEASURE);
+  for (guint i = 0; i < sizeof frame; i++)
+    frame[i] = 128 + (i % 7 < 3 ? 6 : -6);
+  g_assert_cmpint (eh575_calibration_evaluate (&cache, frame), ==, EH575_CALIBRATION_REMEASURE);
+  for (guint i = 0; i < sizeof frame; i++)
+    frame[i] = 128 + (i % 7 < 3 ? 40 : -40);
+  g_assert_cmpint (eh575_calibration_evaluate (&cache, frame), ==, EH575_CALIBRATION_CONTACT);
+  memset (frame, 0, sizeof frame);
+  g_assert_cmpint (eh575_calibration_evaluate (&cache, frame), ==, EH575_CALIBRATION_REMEASURE);
+}
+
 int
 main (int argc, char **argv)
 {
   g_test_init (&argc, &argv, NULL);
-  g_test_add_func ("/egis0575-calibration/boot-suspend-age-device", test_identity);
+  g_test_add_func ("/egis0575-calibration/stable-port-new-process", test_identity);
   g_test_add_func ("/egis0575-calibration/schema-empty-quality", test_content);
   g_test_add_func ("/egis0575-calibration/protected-atomic-files", test_files);
+  g_test_add_func ("/egis0575-calibration/idle-contact-unusable-readings", test_frames);
   return g_test_run ();
 }

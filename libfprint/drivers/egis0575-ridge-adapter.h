@@ -222,6 +222,8 @@ ridge_compare_done (GObject *source, GAsyncResult *task, gpointer data)
     }
   else if (result->status == EH575_RIDGE_POOR_IMAGE)
     {
+      if (recover_saved_calibration (self))
+        return;
       self->action_error = fpi_device_retry_new (FP_DEVICE_RETRY_CENTER_FINGER);
     }
   else if (result->status == EH575_RIDGE_INVALID || result->status == EH575_RIDGE_FAILED)
@@ -257,7 +259,8 @@ ridge_burst (FpDeviceEgis0575 *self)
       if (!eh575_ridge_touch_usable (touch))
         {
           ridge_touch_free (touch);
-          ridge_retry (FP_DEVICE (self), FP_DEVICE_RETRY_CENTER_FINGER);
+          if (!recover_saved_calibration (self))
+            ridge_retry (FP_DEVICE (self), FP_DEVICE_RETRY_CENTER_FINGER);
           return;
         }
       g_ptr_array_add (self->enrollment, touch);

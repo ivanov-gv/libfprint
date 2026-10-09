@@ -44,7 +44,7 @@ struct _FpDeviceEgis0575
   gboolean                 searching, final_measurement;
   Eh575Calibration         calibration;
   Eh575CalibrationIdentity calibration_identity;
-  gboolean                 calibration_candidate, calibration_identity_valid, early_notified;
+  gboolean                 calibration_candidate, calibration_identity_valid, early_notified, using_saved_calibration;
 #if EH575_EXPERIMENTAL_RIDGE
   FpiDeviceAction          action;
   GPtrArray               *enrollment;
@@ -73,7 +73,7 @@ static const char *
 calibration_directory (FpDeviceEgis0575 *self)
 {
   /* Virtual test devices can use memory only. Never write to a guessed path. */
-  return self->calibration_identity.bus && self->calibration_identity.address ?
+  return self->calibration_identity.persistent ?
          g_getenv ("FP_EH575_CALIBRATION_DIR") : NULL;
 }
 
@@ -82,6 +82,7 @@ forget_calibration (FpDeviceEgis0575 *self)
 {
   memset (&self->calibration, 0, sizeof self->calibration);
   self->calibration_candidate = FALSE;
+  self->using_saved_calibration = FALSE;
   if (self->calibration_identity_valid)
     eh575_calibration_store (&self->calibration, &self->calibration_identity, calibration_directory (self));
 }
@@ -90,6 +91,7 @@ static void finish (FpDeviceEgis0575 *self,
                     GError           *error);
 static void dev_activate (Eh575Device *dev);
 static void dev_deactivate (Eh575Device *dev);
+static gboolean recover_saved_calibration (FpDeviceEgis0575 *self);
 #include "egis0575-ridge-adapter.h"
 #endif
 
@@ -107,10 +109,11 @@ finish (FpDeviceEgis0575 *self, GError *error)
   g_clear_object (&self->io_cancel);
   /* An interrupted wire transaction may leave an ACK or image queued. */
   if (self->wire_dirty || (error && error->domain != FP_DEVICE_RETRY))
-    {
-      self->poisoned = TRUE;
-      forget_calibration (self);
-    }
+    self->poisoned = TRUE;
+  /* A profile is measured data, not queued USB state. Preserve it across
+   * cancellation/suspend/transport errors; the next claim must initialize
+   * and validate the wire again before quality-gated reuse.
+   */
   memset (self->samples, 0, sizeof self->samples);
   memset (self->frame, 0, sizeof self->frame);
   memset (self->background, 0, sizeof self->background);
@@ -384,13 +387,13 @@ start_frame (FpDeviceEgis0575 *self)
 static void
 calibration_ready (FpDeviceEgis0575 *self, gboolean measured_empty)
 {
-  if (measured_empty && self->calibration_identity_valid &&
-      eh575_calibration_identity (&self->calibration_identity))
+  if (measured_empty && self->calibration_identity_valid)
     {
       eh575_calibration_record (&self->calibration, &self->calibration_identity, self->dc, self->background);
       eh575_calibration_store (&self->calibration, &self->calibration_identity, calibration_directory (self));
     }
   self->calibration_candidate = FALSE;
+  self->using_saved_calibration = !measured_empty;
   self->early_notified = FALSE;
   self->sample_count = 0;
   self->activating = FALSE;
@@ -414,20 +417,19 @@ calibrate_frame (FpDeviceEgis0575 *self)
   if (self->calibration_candidate)
     {
       const guint8 *background = self->calibration.bytes + 80;
-      double change = eh575_deviation (self->frame, background);
-      if (eh575_deviation (self->frame, NULL) >= 20 && eh575_clipped (self->frame) <= .05 && change >= 8)
+      if (eh575_calibration_evaluate (&self->calibration, self->frame) != EH575_CALIBRATION_REMEASURE)
         {
           /* Only a previously measured empty background may bootstrap contact.
            * Keep the normal settling, quality, five-frame and matching gates.
-           * Do not renew the cache's lifetime from a finger-present frame.
+           * A compatible idle frame also avoids a fresh DC/background search.
            */
           memcpy (self->background, background, EH575_FRAME_SIZE);
-          fp_dbg ("Reusing compatible empty-reader calibration for early contact");
+          fp_dbg ("Reusing saved empty-reader calibration; capture quality gates remain active");
           calibration_ready (self, FALSE);
           return;
         }
-      if (change > 4 || fabs (eh575_mean (self->frame) - eh575_mean (background)) > 16)
-        forget_calibration (self);
+      fp_dbg ("Saved calibration produced unusable readings; measuring a fresh empty reference");
+      forget_calibration (self);
     }
   if (eh575_deviation (self->frame, NULL) > 18)
     {
@@ -506,6 +508,43 @@ calibrate_frame (FpDeviceEgis0575 *self)
 }
 
 static void
+reset_calibration_search (FpDeviceEgis0575 *self)
+{
+  self->searching = self->final_measurement = FALSE;
+  self->sample_count = self->bad_count = self->clear_count = 0;
+  self->low = 0;
+  self->high = 63;
+  self->best_distance = 256;
+}
+
+static gboolean
+recover_saved_calibration (FpDeviceEgis0575 *self)
+{
+  if (!self->using_saved_calibration || !self->running || self->stopping)
+    return FALSE;
+  forget_calibration (self);
+  self->early_notified = TRUE;
+  fp_dbg ("Saved calibration failed image quality; lift briefly for a fresh empty reference");
+#if EH575_EXPERIMENTAL_RIDGE
+  if (self->action == FPI_DEVICE_ACTION_ENROLL)
+    {
+      /* Preserve accepted enrollment stages. Native FpDevice can repeat its
+       * acquisition calibration without completing/restarting enrollment.
+       */
+      reset_calibration_search (self);
+      self->activating = TRUE;
+      self->image_state = FPI_IMAGE_DEVICE_STATE_INACTIVE;
+      fpi_device_report_finger_status (FP_DEVICE (self), FP_FINGER_STATUS_NONE);
+      fpi_device_enroll_progress (FP_DEVICE (self), self->stages, NULL,
+                                  fpi_device_retry_new (FP_DEVICE_RETRY_REMOVE_FINGER));
+      return TRUE;
+    }
+#endif
+  fpi_image_device_retry_scan (EH575_DEVICE (self), FP_DEVICE_RETRY_REMOVE_FINGER);
+  return TRUE;
+}
+
+static void
 process_frame (FpDeviceEgis0575 *self)
 {
   Eh575Device *image_dev = EH575_DEVICE (self);
@@ -536,7 +575,7 @@ process_frame (FpDeviceEgis0575 *self)
       if (eh575_deviation (self->frame, NULL) < 20 || eh575_clipped (self->frame) > .05)
         {
           self->sample_count = 0;
-          if (++self->bad_count == 5)
+          if (++self->bad_count == 5 && !recover_saved_calibration (self))
             fpi_image_device_retry_scan (image_dev, FP_DEVICE_RETRY_CENTER_FINGER);
         }
       else
@@ -676,21 +715,16 @@ dev_activate (Eh575Device *dev)
       return;
     }
   self->running = self->activating = TRUE;
-  self->stopping = self->searching = self->final_measurement = FALSE;
-  self->sample_count = 0;
-  self->low = 0;
-  self->high = 63;
-  self->best_distance = 256;
-  self->calibration_identity_valid = eh575_calibration_identity (&self->calibration_identity);
+  self->stopping = self->using_saved_calibration = FALSE;
+  reset_calibration_search (self);
+  const char *platform_id = NULL;
   if (FP_DEVICE_GET_CLASS (dev)->type == FP_DEVICE_TYPE_USB)
     {
       GUsbDevice *usb = fpi_device_get_usb_device (FP_DEVICE (dev));
       if (usb)
-        {
-          self->calibration_identity.bus = g_usb_device_get_bus (usb);
-          self->calibration_identity.address = g_usb_device_get_address (usb);
-        }
+        platform_id = g_usb_device_get_platform_id (usb);
     }
+  self->calibration_identity_valid = eh575_calibration_identity (&self->calibration_identity, platform_id);
   self->calibration_candidate = FALSE;
   if (self->calibration_identity_valid)
     {

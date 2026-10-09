@@ -209,7 +209,11 @@ area changes. The stock CLI/GNOME UI may not show the private helper's calibrati
 or guided-area text. In the early-touch update, a compatible saved empty-reader
 calibration allows immediate touch-and-hold. Without one, early contact requests
 remove-and-retry rather than aborting immediately: lift briefly and touch again.
-Reboot/resume and one-hour expiry invalidate reuse. The package stores only empty
+The new persistent-profile update tries reuse across reboot/resume without age
+expiry. It binds to the physical USB port and hardware revision and checks current
+readings; unusable profile/image quality requests lift and fresh calibration.
+After upgrading from `EH575C1`, seed `EH575C2` with one empty-start scan; existing
+prints do not need re-enrollment. The package stores only empty
 sensor calibration in root-owned `/var/lib/eh575-libfprint/calibration`, separate
 from prints; no matching thresholds or template formats change.
 The system PolicyKit agent may request your password for enrollment.
@@ -227,9 +231,12 @@ still works. Keep a terminal open and know the rollback command. Then:
 For the early-touch update, seed the cache with a successful empty-start scan.
 Then try immediate touch-and-hold with enrolled and non-enrolled fingers, both
 before and after fprintd's normal idle exit. Expect matches and rejections,
-respectively, without a calibration error. After suspend/resume, test early
-contact: expect a non-terminal `verify-remove-and-retry`, lift briefly and touch
-again within the same client request. Repeat with password fallback and GNOME
+respectively, without a calibration error. After real suspend/resume AND reboot,
+try holding the enrolled finger on the sensor as soon as the verification/login
+screen is ready: a usable saved profile should avoid an empty-start requirement.
+If quality recovery requests `verify-remove-and-retry`, lift briefly and touch
+again within the same client request. Repeat immediate wrong-finger rejection,
+password fallback and GNOME
 lock. Preserve journal errors if any terminal unknown error remains. Until these
 fresh trials pass, cache/retry behavior is development-tested, not hardware-proven.
 5. Record failures and roll back rather than weakening matcher thresholds or

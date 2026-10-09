@@ -67,18 +67,35 @@ exposure with the reader empty and measures an empty-reader background. Calibrat
 controls clipping and brightness changes; background correction prevents fixed
 sensor texture from becoming identity evidence.
 
-The experimental early-touch update can reuse a previously measured empty-reader
-calibration, restoring its DC setting before capture. The optional protected cache
-is valid only for the same USB bus/address, Linux boot and suspend epoch, for at
-most one hour. With a compatible cache, you can touch immediately and hold still.
+The experimental persistent-profile update reuses a previously measured
+empty-reader calibration, restoring its DC setting before capture. The protected
+`EH575C2` profile is bound to the tested hardware revision and a hash of GUsb's
+physical USB port identifier, not its temporary device address. It has no boot,
+suspend or age expiry. A valid saved profile can therefore be tried immediately
+after reboot/resume: touch and hold still. Changing the port identifier requires
+a fresh profile. This is a port binding, not a hardware serial-number guarantee.
 It contains an empty-sensor reference and calibration metadata, not a finger image
 or template. The trial package stores it separately from fprintd's enrolled prints
 in `/var/lib/eh575-libfprint/calibration` (directory 0700, files 0600).
 Private fprintd tests use their own `calibration` directory. Without the explicitly
 configured `FP_EH575_CALIBRATION_DIR`, reuse is in memory only.
 
-On first use, after reboot/resume, or when the cache is unavailable/expired, a brief
-empty-reader measurement is still necessary. Touching early now requests
+Initialization, reply validation and a settling-frame discard still happen on
+every operation. The next reading must be usable contact or a compatible idle
+frame. Idle disagreement triggers fresh calibration; persistent raw clipping/low
+contrast or failed ridge image-quality checks invalidate a reused profile and
+request a lift. A successful idle-start reuse does not repeat the calibration
+search or update the background. Cancellation/suspend/USB errors do not erase a
+good measured profile, but dirty USB state still requires close/reopen. Background
+correction, capture quality and matching thresholds are unchanged. A normal
+`verify-no-match` never updates or deletes the profile, and no finger-present
+capture is used as a new empty reference. File checksums detect accidental damage;
+owner/permission checks protect local storage, not a certified biometric policy.
+
+First use, a missing/invalid profile, or quality-triggered recovery still needs a
+brief empty-reader measurement. The old epoch-bound `EH575C1` files are not
+imported: upgrading requires one empty-start scan, but no re-enrollment.
+Touching early without a usable profile requests
 `verify-remove-and-retry` rather than immediately failing calibration. Stock
 fprintd automatically restarts the retry while keeping its D-Bus verification
 request active: lift briefly, then touch again. The restarted scan waits for lift
@@ -372,12 +389,15 @@ is not changed by this package.
 
 ## Known limitations and troubleshooting
 
-- **Cold calibration still needs a brief lift.** A valid cache allows immediate
-  contact. Without one (including after reboot/resume), early contact produces a
+- **Missing or unusable calibration still needs a brief lift.** A valid profile
+  is tried across reboot/resume, with no one-hour expiry. Without one, or when its
+  readings fail quality checks, early contact produces a
   recoverable remove-and-retry request. Lift briefly and touch again; leaving the
   reader covered until the deadline can still end the attempt. GNOME's own PAM
   timeout may be shorter. This is not yet a promise of touch-and-wait after every
-  hardware reset. Other USB/exposure errors still need diagnosis.
+  hardware reset: saved settings can still become unusable. Other USB/exposure
+  errors need diagnosis. Actual reboot/resume profile reuse still needs fresh
+  hardware testing; passing synthetic tests does not establish reliability.
 - **Small placement changes still need overlapping detail.** Keep the finger
   flat and covering the strip. Partial/poor contact can produce retries. A retry
   named `swipe-too-short` by the generic fprintd API does not mean this press

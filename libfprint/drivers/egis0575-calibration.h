@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Optional empty-reader calibration cache, never a fingerprint template.
- * Linux boot/suspend identity and strict local-file permissions fail closed.
+ * Persistent physical-port binding and strict local-file permissions.
  */
 #pragma once
 #include "egis0575.h"
@@ -8,19 +8,15 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <sys/stat.h>
-#include <time.h>
 #include <unistd.h>
 
 #define EH575_CALIBRATION_SIZE (80 + EH575_FRAME_SIZE)
-#define EH575_CALIBRATION_MAX_AGE G_GINT64_CONSTANT (3600000000)
 
 typedef struct
 {
-  guint8 bus, address;
-  char   boot[37];
-  gint64 monotonic, suspended;
+  guint8   device[32];
+  gboolean persistent;
 } Eh575CalibrationIdentity;
 
 typedef struct
@@ -30,36 +26,31 @@ typedef struct
 } Eh575Calibration;
 
 static gboolean G_GNUC_UNUSED
-eh575_calibration_identity (Eh575CalibrationIdentity *identity)
+eh575_calibration_identity (Eh575CalibrationIdentity *identity, const char *platform_id)
 {
-#ifdef CLOCK_BOOTTIME
-  struct timespec boot, mono;
-  g_autofree char *id = NULL;
-  gsize length;
-  if (!g_file_get_contents ("/proc/sys/kernel/random/boot_id", &id, &length, NULL) ||
-      length != 37 || id[36] != '\n' ||
-      clock_gettime (CLOCK_MONOTONIC, &mono) || clock_gettime (CLOCK_BOOTTIME, &boot))
+  memset (identity, 0, sizeof *identity);
+  /* Without a physical ID, reuse is limited to this object's memory. */
+  if (!platform_id)
+    return TRUE;
+  if (!*platform_id || strnlen (platform_id, 256) >= 256)
     return FALSE;
-  id[36] = 0;
-  if (!g_uuid_string_is_valid (id))
-    return FALSE;
-  memcpy (identity->boot, id, 37);
-  identity->monotonic = (gint64) mono.tv_sec * 1000000 + mono.tv_nsec / 1000;
-  identity->suspended = (gint64) boot.tv_sec * 1000000 + boot.tv_nsec / 1000 - identity->monotonic;
+  g_autofree char *key = g_strdup_printf ("EH575:1c7a:0575:%04x:%s", EH575_REVISION, platform_id);
+  g_autoptr(GChecksum) checksum = g_checksum_new (G_CHECKSUM_SHA256);
+  gsize length = sizeof identity->device;
+  g_checksum_update (checksum, (const guint8 *) key, strlen (key));
+  g_checksum_get_digest (checksum, identity->device, &length);
+  identity->persistent = TRUE;
   return TRUE;
-#else
-  (void) identity;
-  return FALSE;
-#endif
 }
 
-static guint64
-eh575_calibration_read_time (const guint8 *bytes)
+static void
+eh575_calibration_digest (const guint8 *bytes, guint8 digest[32])
 {
-  guint64 value;
-
-  memcpy (&value, bytes, sizeof value);
-  return GUINT64_FROM_LE (value);
+  g_autoptr(GChecksum) checksum = g_checksum_new (G_CHECKSUM_SHA256);
+  gsize length = 32;
+  g_checksum_update (checksum, bytes, 48);
+  g_checksum_update (checksum, bytes + 80, EH575_FRAME_SIZE);
+  g_checksum_get_digest (checksum, digest, &length);
 }
 
 static gboolean
@@ -76,45 +67,49 @@ eh575_calibration_compatible (const Eh575Calibration         *cache,
                               const Eh575CalibrationIdentity *identity)
 {
   const guint8 *b = cache->bytes;
-  guint64 stamp = eh575_calibration_read_time (b + 16);
-  guint64 suspended = eh575_calibration_read_time (b + 24);
+  guint8 digest[32];
 
-  if (!cache->valid || memcmp (b, "EH575C1", 8) || b[8] != identity->bus ||
-      b[9] != identity->address || b[10] > 63 || b[11] != (EH575_REVISION & 255) ||
-      b[12] != (EH575_REVISION >> 8) || memcmp (b + 32, identity->boot, 36) ||
-      identity->monotonic < 0 || identity->suspended < 0 || stamp > (guint64) identity->monotonic ||
-                            (guint64) identity->monotonic - stamp > EH575_CALIBRATION_MAX_AGE ||
-      suspended > G_MAXINT64 || llabs ((gint64) suspended - identity->suspended) > 50000)
+  if (!cache->valid || memcmp (b, "EH575C2", 8) || b[8] || b[9] || b[10] > 63 ||
+      b[11] != (EH575_REVISION & 255) || b[12] != (EH575_REVISION >> 8) ||
+      memcmp (b + 16, identity->device, 32))
     return FALSE;
   for (guint i = 13; i < 16; i++)
     if (b[i])
       return FALSE;
-  for (guint i = 68; i < 80; i++)
-    if (b[i])
-      return FALSE;
-  return eh575_calibration_empty (b + 80);
+  eh575_calibration_digest (b, digest);
+  return !memcmp (b + 48, digest, 32) && eh575_calibration_empty (b + 80);
+}
+
+typedef enum { EH575_CALIBRATION_IDLE, EH575_CALIBRATION_CONTACT, EH575_CALIBRATION_REMEASURE } Eh575CalibrationFrame;
+
+static Eh575CalibrationFrame G_GNUC_UNUSED
+eh575_calibration_evaluate (const Eh575Calibration *cache, const guint8 *frame)
+{
+  const guint8 *background = cache->bytes + 80;
+  double change = eh575_deviation (frame, background);
+
+  if (eh575_deviation (frame, NULL) >= 20 && eh575_clipped (frame) <= .05 && change >= 8)
+    return EH575_CALIBRATION_CONTACT;
+  if (eh575_calibration_empty (frame) && change <= 4 &&
+      fabs (eh575_mean (frame) - eh575_mean (background)) <= 16)
+    return EH575_CALIBRATION_IDLE;
+  return EH575_CALIBRATION_REMEASURE;
 }
 
 static void G_GNUC_UNUSED
 eh575_calibration_record (Eh575Calibration *cache, const Eh575CalibrationIdentity *identity,
                           int dc, const guint8 *background)
 {
-  guint64 stamp = GUINT64_TO_LE ((guint64) identity->monotonic);
-  guint64 suspended = GUINT64_TO_LE ((guint64) identity->suspended);
-
   memset (cache, 0, sizeof *cache);
-  if (dc < 0 || dc > 63 || !eh575_calibration_empty (background) || identity->suspended < 0)
+  if (dc < 0 || dc > 63 || !eh575_calibration_empty (background))
     return;
-  memcpy (cache->bytes, "EH575C1", 8);
-  cache->bytes[8] = identity->bus;
-  cache->bytes[9] = identity->address;
+  memcpy (cache->bytes, "EH575C2", 8);
   cache->bytes[10] = dc;
   cache->bytes[11] = EH575_REVISION & 255;
   cache->bytes[12] = EH575_REVISION >> 8;
-  memcpy (cache->bytes + 16, &stamp, 8);
-  memcpy (cache->bytes + 24, &suspended, 8);
-  memcpy (cache->bytes + 32, identity->boot, 36);
+  memcpy (cache->bytes + 16, identity->device, 32);
   memcpy (cache->bytes + 80, background, EH575_FRAME_SIZE);
+  eh575_calibration_digest (cache->bytes, cache->bytes + 48);
   cache->valid = TRUE;
 }
 
@@ -137,7 +132,16 @@ eh575_calibration_directory (const char *directory)
 static char *
 eh575_calibration_filename (const Eh575CalibrationIdentity *identity)
 {
-  return g_strdup_printf (".eh575-calibration-v1-%u-%u", identity->bus, identity->address);
+  char hex[65];
+  const char *digits = "0123456789abcdef";
+
+  for (guint i = 0; i < 32; i++)
+    {
+      hex[2 * i] = digits[identity->device[i] >> 4];
+      hex[2 * i + 1] = digits[identity->device[i] & 15];
+    }
+  hex[64] = 0;
+  return g_strdup_printf (".eh575-calibration-v2-%s", hex);
 }
 
 static gboolean
@@ -162,7 +166,7 @@ eh575_calibration_load (Eh575Calibration *cache, const Eh575CalibrationIdentity 
 {
   struct stat st;
   gboolean valid = FALSE;
-  int dir = eh575_calibration_directory (directory);
+  int dir = eh575_calibration_directory (identity->persistent ? directory : NULL);
   g_autofree char *name = eh575_calibration_filename (identity);
 
   memset (cache, 0, sizeof *cache);
@@ -190,7 +194,7 @@ static void G_GNUC_UNUSED
 eh575_calibration_store (Eh575Calibration *cache, const Eh575CalibrationIdentity *identity,
                          const char *directory)
 {
-  int dir = eh575_calibration_directory (directory);
+  int dir = eh575_calibration_directory (identity->persistent ? directory : NULL);
   g_autofree char *name = eh575_calibration_filename (identity);
   g_autofree char *temp = g_strdup_printf ("%s.%08x.tmp", name, g_random_int ());
 

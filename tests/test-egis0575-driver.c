@@ -44,6 +44,7 @@ static gpointer queued_data;
 static guint activated, deactivated, errors, captured, submitted, frames;
 static guint active_frames, retries;
 static int dc;
+static int idle_bias;
 
 static GCancellable *
 test_get_cancellable (FpDevice *dev)
@@ -172,7 +173,7 @@ dispatch (FpDeviceEgis0575 *self)
     }
   else
     {
-      int base = MAX (0, MIN (255, 128 + (dc - 32) * 23));
+      int base = MAX (0, MIN (255, 128 + (dc - 32) * 23 + idle_bias));
       int amplitude = self->activating ? 12 : (captured ? 12 : 40);
       if ((scenario == EARLY_FINGER && self->activating && frames < 6) || scenario == EARLY_TIMEOUT)
         amplitude = 40;
@@ -217,6 +218,7 @@ new_device (Scenario selected)
   activated = deactivated = errors = captured = submitted = frames = 0;
   active_frames = retries = 0;
   dc = 32;
+  idle_bias = 0;
   parent_cancel = g_cancellable_new ();
   return g_object_new (fpi_device_egis0575_get_type (), NULL);
 }
@@ -341,7 +343,7 @@ test_cached_early_contact (void)
   g_assert_true (self->calibration.valid);
   guint8 saved[EH575_CALIBRATION_SIZE];
   memcpy (saved, self->calibration.bytes, sizeof saved);
-  captured = frames = 0;
+  captured = frames = active_frames = 0;
   scenario = EARLY_FINGER;
   dc = 36; /* Initialization must restore the cached DC before using its bg. */
   dev_activate (FP_IMAGE_DEVICE (self));
@@ -349,7 +351,41 @@ test_cached_early_contact (void)
   g_assert_cmpuint (errors, ==, 0);
   g_assert_cmpuint (captured, ==, 1);
   g_assert_cmpint (dc, ==, 32);
+  g_assert_cmpuint (frames - active_frames, ==, 2);
   g_assert_cmpmem (saved, sizeof saved, self->calibration.bytes, sizeof saved);
+  g_object_unref (self);
+  g_object_unref (parent_cancel);
+}
+
+static void
+test_cached_idle (void)
+{
+  FpDeviceEgis0575 *self = new_device (GOOD);
+
+  dev_activate (FP_IMAGE_DEVICE (self));
+  run_until_stopped (self);
+  guint8 saved[EH575_CALIBRATION_SIZE];
+  memcpy (saved, self->calibration.bytes, sizeof saved);
+  captured = frames = active_frames = 0;
+  dc = 53;
+  dev_activate (FP_IMAGE_DEVICE (self));
+  run_until_stopped (self);
+  g_assert_cmpuint (errors, ==, 0);
+  g_assert_cmpuint (captured, ==, 1);
+  g_assert_cmpint (dc, ==, 32);
+  g_assert_cmpuint (frames - active_frames, ==, 2);
+  g_assert_cmpmem (saved, sizeof saved, self->calibration.bytes, sizeof saved);
+  /* A measured idle mismatch must instead cause real remeasurement/search. */
+  captured = frames = active_frames = 0;
+  idle_bias = 24;
+  dev_activate (FP_IMAGE_DEVICE (self));
+  run_until_stopped (self);
+  g_assert_cmpuint (errors, ==, 0);
+  g_assert_cmpuint (captured, ==, 1);
+  g_assert_cmpuint (frames - active_frames, >, 4);
+  g_assert_cmpint (dc, ==, 31);
+  g_assert_true (self->calibration.valid);
+  g_assert_cmpint (self->calibration.bytes[10], ==, 31);
   g_object_unref (self);
   g_object_unref (parent_cancel);
 }
@@ -371,5 +407,6 @@ main (int argc, char **argv)
   g_test_add_func ("/egis0575/clean-reactivation", test_clean_reactivation);
   g_test_add_func ("/egis0575/polling-policy", test_polling_policy);
   g_test_add_func ("/egis0575/cached-early-contact-restores-dc", test_cached_early_contact);
+  g_test_add_func ("/egis0575/cached-idle-skips-search-drift-remeasures", test_cached_idle);
   return g_test_run ();
 }

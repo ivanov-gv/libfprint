@@ -57,25 +57,42 @@ The session background is a per-pixel median of the
 three actually measured reference frames. Failed calibration leaves a volatile
 setting until fresh initialization; it does not promise restoration.
 
-The optional `EH575C1` cache stores only a successfully measured empty background,
-DC 0..63, USB bus/address, Linux boot UUID, monotonic timestamp and accumulated
-suspend time (CLOCK_BOOTTIME minus CLOCK_MONOTONIC). Version/reserved bytes,
-background quality, identity, non-future timestamp, one-hour age and suspend delta
-(50 ms tolerance) are checked before use. Initialization and ACK validation still
-run; the cached DC is explicitly written and one settling frame discarded.
-A finger-like next frame can start acquisition using that reference, without
-renewing its timestamp. If an idle frame differs in spatial RMS by more than 4
-or mean by more than 16, discard the candidate and recalibrate. Changing DC during
-search also invalidates it. Transfer/device failures discard the cache.
+The optional persistent `EH575C2` profile stores only a successfully measured empty
+background, DC 0..63, revision 1072, a SHA-256 physical-port identity and a SHA-256
+content checksum. GUsb's platform identifier is designed to survive unplug/replug;
+temporary USB addresses, boot/suspend clocks and age are not part of the profile.
+This is a physical-port binding, not a serial-number identity. Schema/reserved
+bytes, revision, identity, checksum and background quality are checked before use.
+The checksum detects corruption, not privileged tampering. The old `EH575C1`
+format is rejected, not migrated from an address-bound file.
+
+Initialization and ACK validation still run; cached DC is explicitly written and
+one settling frame discarded. A next frame with raw deviation >=20, clipping <=5%
+and background-corrected spatial RMS >=8 can start acquisition. An idle frame
+must retain mean 96..160, deviation <=18, clipping <=0.5%, background-relative
+spatial RMS <=4 and mean offset <=16; it then starts acquisition without fresh
+calibration/search. Anything else discards the candidate and recalibrates.
+Changing DC during search also invalidates it. Five bad raw capture frames or
+failed ridge image quality on a reused profile requests REMOVE_FINGER and discards
+that profile. Verification retries through stock fprintd; native enrollment
+recalibrates in place without losing accepted stages or extending the pending
+calibration wait deadline. Ordinary NO_MATCH never changes the profile or retries
+the matcher with altered thresholds. Finger frames never refresh the profile.
+USB errors/cancellation/suspend preserve measured data independently of transport:
+dirty wire state still requires a close/reopen and complete validated initialization.
 
 Memory reuse survives clean operations on one object. Cross-process reuse requires
 `FP_EH575_CALIBRATION_DIR`: an absolute, euid-owned 0700 directory, no final symlink.
 Reads require a regular, single-link, euid-owned 0600 file of exactly 5436 bytes;
-symlinks, FIFOs, invalid/expired data and missing storage fall back to calibration.
+symlinks, FIFOs, wrong-version/corrupt data and missing storage fall back to calibration.
 Writes are exclusive-temp-file, fsync and atomic rename; no fingerprint frames or
 templates enter this cache. No directories are guessed/created by the driver.
 The package supplies a separate root-owned directory and narrow ReadWritePaths
 exception; fprintd's StateDirectory and print store are unchanged.
+
+Raw and prepared-image quality checks do not prove that an old background is
+accurate under every temperature/contact condition. This persistent policy is
+experimental: genuine/wrong-finger trials across actual reboot/resume are required.
 
 Contact is spatial RMS deviation ≥8 from the measured background after removing
 global brightness shift. Require three empty frames to report finger removal.

@@ -36,8 +36,11 @@ Keep the sensor empty during initial calibration; use 15 stationary touches with
 three each at center/tip/base/left/right, moving only between touches.
 After a successful empty-start scan, a compatible cache permits early touch-and-hold.
 It stores only an empty-sensor reference and DC metadata, not a finger/template,
-in /var/lib/eh575-libfprint/calibration (0700 directory, 0600 files). Boot, physical
-suspend, device changes and one-hour expiry invalidate reuse. Cold early contact
+in /var/lib/eh575-libfprint/calibration (0700 directory, 0600 files). The v2 profile
+binds to hardware revision and physical USB port, not boot/sleep/age. It is tried
+across reboot/resume; disagreement or failed image quality requires fresh calibration.
+After upgrading from v1, one empty-start scan seeds v2, without re-enrollment.
+Missing/invalid-profile early contact
 requests remove-and-retry: lift briefly, then touch again in the same client request.
 Acquisition quality and matching thresholds are unchanged; test the update afresh.
 Test fprintd-verify with enrolled and non-enrolled fingers BEFORE locking.
@@ -139,7 +142,7 @@ UnsetEnvironment=LD_PRELOAD DBUS_SYSTEM_BUS_ADDRESS DBUS_SESSION_BUS_ADDRESS
         "library_sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
         "template_schema": "eh575-ridge-v1", "security_certified": False,
         "system_pam_modified": False, "biometric_data_included": False,
-        "calibration_cache": "empty-reader-v1; same boot/suspend/device; max age 1 hour",
+        "calibration_cache": "empty-reader-v2; physical USB port/revision; quality-based recovery; no epoch/age expiry",
     }, indent=2) + "\n")
     (root / "DEBIAN").mkdir(mode=0o755)
     write(root, "DEBIAN/control", control(version, "amd64", revision))

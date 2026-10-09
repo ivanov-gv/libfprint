@@ -14,15 +14,24 @@ the original upstream baseline. The GitHub `origin` is the development fork;
 
 ## Current status
 
-The early-touch development update reuses a bounded empty-reader calibration
-cache and replaces fatal finger-present calibration with lift/retry recovery.
-The cache is bound to boot, suspend epoch and USB enumeration and expires after
-one hour; real cold starts still need a brief empty measurement. It does not
+The persistent-profile development update reuses measured empty-reader calibration
+across boot/resume, bound to hardware revision and the physical USB port identifier,
+with no time-based expiry. It replaces fatal finger-present calibration with
+lift/retry recovery. The driver restores DC and checks current readings before
+using the background; idle disagreement or failed acquisition/ridge image quality
+invalidates it and requires a fresh empty measurement. A normal no-match does not
+invalidate it. USB/cancel/suspend cleanup still validates transport independently.
+The previous `EH575C1` format is deliberately not imported; seed the new `EH575C2`
+profile with one empty-start scan after upgrading, without re-enrolling. It does not
 change matching thresholds, template schema, settling or burst requirements.
 The package provides optional root-owned cache storage separate from fprintd's
 prints; private sessions have their own cache. See the protocol note for file
 guards and README for the user workflow. Synthetic warm/cold contact, wrong-finger,
 cancellation and cache-guard tests do not establish real-reader reliability.
+Additional tests exercise new-object disk reuse with a reset DC register, unchanged
+profile on wrong-finger rejection/cancellation, raw and matcher-quality fallback,
+and mid-enrollment recovery that preserves accepted stages. These simulate the
+relevant transitions; they do not replace real reboot/resume/GNOME trials.
 
 Native discovery, claim/release, initialization, idle exposure calibration,
 cancellation and real image capture have worked. The reported capture was
