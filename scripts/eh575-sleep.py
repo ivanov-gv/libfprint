@@ -256,6 +256,9 @@ def request(phase, action):
             reply += block
         if not reply.endswith(b"\n"):
             raise RuntimeError("Sleep supervisor reply incomplete")
+        expected = {b"OK armed\n"} if phase == "pre" else {b"OK restored\n", b"OK idle\n"}
+        if reply not in expected:
+            raise RuntimeError("Sleep supervisor failed: " + reply.decode("ascii", errors="replace").strip())
         print("eh575-sleep: " + reply.decode("ascii", errors="replace").strip(), flush=True)
 
 

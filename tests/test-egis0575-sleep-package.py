@@ -47,6 +47,8 @@ class PackageTests(unittest.TestCase):
                 self.assertEqual((root / path).stat().st_mode & 0o777, 0o755)
             self.assertNotIn("systemctl", module.SLEEP_HOOK)
             self.assertNotIn("hibernate\n", module.SLEEP_HOOK)
+            for path in (root, *(p for p in root.rglob("*") if p.is_dir())):
+                self.assertEqual(path.stat().st_mode & 0o777, 0o755)
 
     def test_elf_relocation_and_runtime_dependencies(self):
         text = "\n".join("Shared library: [" + name + "]" for name in

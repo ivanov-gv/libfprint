@@ -7,6 +7,7 @@ import socket
 import subprocess
 import sys
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location(
     "eh575_sleep", Path(__file__).resolve().parents[1] / "scripts/eh575-sleep.py")
@@ -137,6 +138,47 @@ class SupervisorTests(unittest.TestCase):
         first, second = socket.socketpair()
         with first, second:
             self.assertEqual(module.root_peer(first), os.getuid() == 0)
+
+
+class HookClientTests(unittest.TestCase):
+    def request(self, phase, reply):
+        client = mock.MagicMock()
+        client.__enter__.return_value = client
+        client.recv.side_effect = [reply, b""]
+        with mock.patch.object(module, "safe_runtime"), mock.patch.object(module, "root_peer", return_value=True), \
+             mock.patch.object(module.socket, "socket", return_value=client), mock.patch("builtins.print"):
+            module.request(phase, "suspend")
+        client.sendall.assert_called_once_with((phase.upper() + " suspend\n").encode())
+
+    def test_only_matching_complete_reply_is_success(self):
+        self.request("pre", b"OK armed\n")
+        self.request("post", b"OK restored\n")
+        self.request("post", b"OK idle\n")
+        for phase, reply in (("pre", b"OK idle\n"), ("post", b"OK armed\n"),
+                             ("pre", b"ERROR failed\n"), ("post", b"OK restored"),
+                             ("post", b"OK restored\nextra\n"), ("pre", b"")):
+            with self.subTest(phase=phase, reply=reply), self.assertRaises(RuntimeError):
+                self.request(phase, reply)
+
+    def test_unsupported_sleep_never_connects(self):
+        with mock.patch.object(module.socket, "socket") as connection, mock.patch("builtins.print"):
+            module.request("pre", "hibernate")
+        connection.assert_not_called()
+
+    def test_private_runtime_ownership_type_and_mode(self):
+        import stat
+        directory = mock.Mock()
+        for mode, uid, safe in ((stat.S_IFDIR | 0o700, 0, True),
+                               (stat.S_IFDIR | 0o755, 0, False),
+                               (stat.S_IFDIR | 0o700, 1000, False),
+                               (stat.S_IFLNK | 0o700, 0, False),
+                               (stat.S_IFREG | 0o700, 0, False)):
+            directory.lstat.return_value = mock.Mock(st_mode=mode, st_uid=uid)
+            if safe:
+                module.safe_runtime(directory)
+            else:
+                with self.assertRaises(RuntimeError):
+                    module.safe_runtime(directory)
 
 
 if __name__ == "__main__":

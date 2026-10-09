@@ -174,6 +174,12 @@ set -e
 systemctl daemon-reload || true
 exit 0
 """, True)
+    # A developer's group-writable umask must not make root executable parent
+    # directories writable by a group in the installed package.
+    root.chmod(0o755)
+    for path in root.rglob("*"):
+        if path.is_dir():
+            path.chmod(0o755)
 
 
 def main():
