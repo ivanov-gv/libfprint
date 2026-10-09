@@ -31,6 +31,15 @@ struct Candidate
   Score   score;
   cv::Mat transform;
 };
+struct CorrelationParts
+{
+  cv::Mat spectrum[3];
+};
+struct RotatedProbe
+{
+  cv::Mat transform;
+  CorrelationParts parts;
+};
 bool
 cancelled (GCancellable *c)
 {
@@ -166,21 +175,38 @@ distance (const cv::Mat &a, const cv::Mat &b)
   return largest;
 }
 
-cv::Mat
-surface (const cv::Mat &probe, const cv::Mat &reference, const cv::Mat &source_mask, const cv::Mat &reference_mask)
+CorrelationParts
+correlation_parts (const cv::Mat &ridge, const cv::Mat &mask, bool target)
 {
-  cv::Mat rm, sm;
+  CorrelationParts parts;
+  cv::Mat weight;
 
-  reference_mask.convertTo (rm, CV_32F, 1. / 255);
-  source_mask.convertTo (sm, CV_32F, 1. / 255);
-  cv::Mat targets[3] = {rm, reference.mul (rm), reference.mul (reference).mul (rm)};
-  cv::Mat parts[3] = {sm, probe.mul (sm), probe.mul (probe).mul (sm)};
-  for (cv::Mat &target : targets)
-    cv::copyMakeBorder (target, target, 30, 30, 50, 50, cv::BORDER_CONSTANT, 0);
-  auto corr = [&] (int target, int part) {
+  mask.convertTo (weight, CV_32F, 1. / 255);
+  cv::Mat values[3] = {weight, ridge.mul (weight), ridge.mul (ridge).mul (weight)};
+  const cv::Size size (cv::getOptimalDFTSize (W + 100), cv::getOptimalDFTSize (H + 60));
+  for (int i = 0; i < 3; i++)
+    {
+      cv::Mat padded = cv::Mat::zeros (size, CV_32F);
+      values[i].copyTo (padded (cv::Rect (target ? 50 : 0, target ? 30 : 0, W, H)));
+      cv::dft (padded, parts.spectrum[i]);
+    }
+  return parts;
+}
+
+cv::Mat
+surface (const CorrelationParts &source, const CorrelationParts &target)
+{
+  /* Same six masked cross-correlations as TM_CCORR, but reuse the forward
+   * transforms. The padded target is W+100 by H+60. Circular correlation at
+   * offsets x=0..100, y=0..60 cannot wrap: each source fits inside that target.
+   * No translation, overlap or acceptance bound is narrowed by this cache.
+   */
+  auto corr = [&] (int a, int b) {
+                cv::Mat product;
                 cv::Mat result;
-                cv::matchTemplate (targets[target], parts[part], result, cv::TM_CCORR);
-                return result;
+                cv::mulSpectrums (target.spectrum[a], source.spectrum[b], product, 0, true);
+                cv::idft (product, result, cv::DFT_SCALE | cv::DFT_REAL_OUTPUT);
+                return result (cv::Rect (0, 0, 101, 61)).clone ();
               };
   cv::Mat count = corr (0, 0), safe, sa = corr (0, 1), sb = corr (1, 0);
   cv::max (count, 1, safe);
@@ -238,37 +264,49 @@ feature_seed (const Prepared &probe, const Prepared &reference)
 }
 
 bool
-registration (const Prepared &probe, const Prepared &reference, Candidate &best, double &margin, GCancellable *cancel)
+registration (const Prepared &probe, const Prepared &reference,
+              const CorrelationParts &reference_parts, std::vector<RotatedProbe> &rotations,
+              Candidate &best, double &margin, GCancellable *cancel)
 {
   std::vector<Candidate> candidates, refined;
 
-  for (double scale : {.85, 1., 1.15})
-    for (int angle = -35; angle <= 35; angle += 5)
-      {
-        if (cancelled (cancel))
-          return false;
-        cv::Mat transform = cv::getRotationMatrix2D (cv::Point2f ((W - 1) / 2., (H - 1) / 2.), angle, scale);
-        cv::Mat rotated, mask;
-        cv::warpAffine (probe.ridge, rotated, transform, cv::Size (W, H));
-        cv::warpAffine (probe.mask, mask, transform, cv::Size (W, H), cv::INTER_NEAREST);
-        cv::Mat peaks = surface (rotated, reference.ridge, mask, reference.mask);
-        for (int i = 0; i < 3; i++)
-          {
-            double peak;
-            cv::Point position;
-            cv::minMaxLoc (peaks, nullptr, &peak, nullptr, &position);
-            if (peak < 0)
-              break;
-            cv::Mat shifted = transform.clone ();
-            shifted.at<double> (0, 2) += position.x - 50;
-            shifted.at<double> (1, 2) += position.y - 30;
-            candidates.push_back ({{0, coarse_correlation (probe, reference, shifted), 0, 0}, shifted});
-            int left = std::max (0, position.x - 2), top = std::max (0, position.y - 2);
-            cv::Rect region (left, top, std::min (peaks.cols, position.x + 3) - left,
-                             std::min (peaks.rows, position.y + 3) - top);
-            peaks (region).setTo (-1);
-          }
-      }
+  /* Probe rotations are independent of the enrolled area. Build them lazily
+   * once per comparison, never persist fingerprint-derived caches on disk.
+   */
+  if (rotations.empty ())
+    for (double scale : {.85, 1., 1.15})
+      for (int angle = -35; angle <= 35; angle += 5)
+        {
+          if (cancelled (cancel))
+            return false;
+          cv::Mat transform = cv::getRotationMatrix2D (cv::Point2f ((W - 1) / 2., (H - 1) / 2.), angle, scale);
+          cv::Mat rotated, mask;
+          cv::warpAffine (probe.ridge, rotated, transform, cv::Size (W, H));
+          cv::warpAffine (probe.mask, mask, transform, cv::Size (W, H), cv::INTER_NEAREST);
+          rotations.push_back ({transform, correlation_parts (rotated, mask, false)});
+        }
+  for (const RotatedProbe &rotated : rotations)
+    {
+      if (cancelled (cancel))
+        return false;
+      cv::Mat peaks = surface (rotated.parts, reference_parts);
+      for (int i = 0; i < 3; i++)
+        {
+          double peak;
+          cv::Point position;
+          cv::minMaxLoc (peaks, nullptr, &peak, nullptr, &position);
+          if (peak < 0)
+            break;
+          cv::Mat shifted = rotated.transform.clone ();
+          shifted.at<double> (0, 2) += position.x - 50;
+          shifted.at<double> (1, 2) += position.y - 30;
+          candidates.push_back ({{0, coarse_correlation (probe, reference, shifted), 0, 0}, shifted});
+          int left = std::max (0, position.x - 2), top = std::max (0, position.y - 2);
+          cv::Rect region (left, top, std::min (peaks.cols, position.x + 3) - left,
+                           std::min (peaks.rows, position.y + 3) - top);
+          peaks (region).setTo (-1);
+        }
+    }
   std::sort (candidates.begin (), candidates.end (), [] (const Candidate &a, const Candidate &b) {
       return a.score.correlation > b.score.correlation;
     });
@@ -377,6 +415,9 @@ eh575_ridge_compare (const Eh575RidgeTouch *touches, unsigned int count, const E
        * the exhaustive matcher would reject. No template/schema policy changes.
        */
       std::vector<Prepared> references (count);
+      std::vector<CorrelationParts> reference_parts (count);
+      const CorrelationParts probe_parts = correlation_parts (representative.ridge, representative.mask, false);
+      std::vector<RotatedProbe> rotations;
       struct OrderedArea { double priority; unsigned int index; };
       std::vector<OrderedArea> order;
       for (unsigned int i = 0; i < count; i++)
@@ -395,8 +436,8 @@ eh575_ridge_compare (const Eh575RidgeTouch *touches, unsigned int count, const E
            * acceptance or a filter. Every attempted area still gets the full
            * rotation/scale/affine search and ambiguity/corroboration checks.
            */
-          cv::Mat hint = surface (representative.ridge, references[i].ridge,
-                                  representative.mask, references[i].mask);
+          reference_parts[i] = correlation_parts (references[i].ridge, references[i].mask, true);
+          cv::Mat hint = surface (probe_parts, reference_parts[i]);
           double peak;
           cv::minMaxLoc (hint, nullptr, &peak);
           order.push_back ({peak, i});
@@ -415,7 +456,7 @@ eh575_ridge_compare (const Eh575RidgeTouch *touches, unsigned int count, const E
           const Prepared &reference = references[i];
           Candidate best;
           double margin;
-          if (!registration (representative, reference, best, margin, cancel))
+          if (!registration (representative, reference, reference_parts[i], rotations, best, margin, cancel))
             continue;
           unsigned int matched = 0;
           for (const Prepared &frame : frames)

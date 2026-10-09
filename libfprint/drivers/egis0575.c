@@ -167,6 +167,20 @@ continue_frame (gpointer data)
   return G_SOURCE_REMOVE;
 }
 
+static guint
+frame_interval (FpDeviceEgis0575 *self, gint64 now)
+{
+  /* React faster to initial contact, but retain the 80 ms interval between
+   * captured samples and lift checks. Do not shorten the 250 ms settling gate.
+   * Its final wait need not round up to another full polling interval.
+   */
+  if (self->image_state == FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_ON)
+    return 20;
+  if (self->image_state == FPI_IMAGE_DEVICE_STATE_CAPTURE && self->sample_count == 0 && now < self->settle_until)
+    return MIN (80, MAX (1, (self->settle_until - now + 999) / 1000));
+  return 80;
+}
+
 static void
 set_dc (FpDeviceEgis0575 *self, int dc)
 {
@@ -385,7 +399,7 @@ calibrate_frame (FpDeviceEgis0575 *self)
       self->operation_deadline = g_get_monotonic_time () + 30000000;
       fpi_image_device_activate_complete (EH575_DEVICE (self), NULL);
       if (!self->stopping)
-        self->timer = g_timeout_add (80, continue_frame, self);
+        self->timer = g_timeout_add (frame_interval (self, g_get_monotonic_time ()), continue_frame, self);
       return;
     }
   if (self->searching)
@@ -499,7 +513,7 @@ process_frame (FpDeviceEgis0575 *self)
     return;
 #endif
   if (!self->stopping)
-    self->timer = g_timeout_add (80, continue_frame, self);
+    self->timer = g_timeout_add (frame_interval (self, g_get_monotonic_time ()), continue_frame, self);
   else if (!self->pending)
     finish (self, NULL);
 }

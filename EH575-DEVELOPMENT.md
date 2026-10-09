@@ -138,7 +138,7 @@ No recordings or biometric templates are published. Optional diagnostic:
   --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root
 ```
 
-### Matching latency optimization
+### First matching latency optimization
 
 The user reported working GNOME unlock but roughly three seconds of matching
 latency. A preserved pre-change diagnostic binary took about 2.9 seconds for a
@@ -179,6 +179,44 @@ Do not publish the private inputs. Native tests additionally cover invalid LAST
 gallery area, match in a later area, two-versus-three-frame quorum and prohibition
 on pooling evidence across gallery areas. Nine selected suites and three sanitizer
 suites passed during this optimization.
+
+### Second latency pass: reusable correlation transforms and touch polling
+
+After installing the first speed update, the user reported noticeably better
+GNOME unlock but requested another improvement. Profiling a synthetic 15-area
+comparison showed the six masked cross-correlations dominated computation.
+The matcher now computes their equivalent FFT correlations explicitly, caching
+each enrolled area's forward transforms and all 45 rotated/scaled probe transforms
+for ONE comparison only. Nothing is cached across users/scans or persisted.
+The valid 101-by-61 translation surface, overlap gates, candidate ranking, search
+angles/scales, ECC refinement, ambiguity/corroboration thresholds and three-of-five
+shared-transform quorum are retained. No enrolled area is filtered out.
+FFT arithmetic is not bit-identical to OpenCV's previous implementation; the new
+synthetic surface-equivalence test compares against the original six TM_CCORR
+calls within 2e-5, including unrelated textures, periodic/blank inputs, irregular
+contact and boundary translations. Historical decision parity is not proof for
+all inputs, fresh hardware validation or biometric security certification.
+
+Initial-contact polling waits 20 ms rather than 80 ms between frame transactions.
+The last wait before the 250 ms settling deadline no longer rounds up to a full
+80 ms. The settling gate, five verification samples, 80 ms waits BETWEEN captured
+samples, 0.97 stability, exposure/background checks and lift checks are unchanged.
+An explicit deterministic polling-policy regression test locks those bounds.
+USB latency and scheduling are additional; this is not a measured live-unlock
+latency guarantee.
+
+Two 32-probe replays against the preserved first-speed-update binary agreed on
+ALL statuses/acceptance decisions: 7/8 genuine, 0/24 wrong-finger accepts, zero
+invalid/matcher failures. Process-inclusive medians were 378.7 to 295.0 ms genuine
+and 4070.5 to 2832.0 ms wrong-finger in the initial run; the final build replay
+measured 499.6 to 381.5 ms genuine and 4084.5 to 2834.1 ms wrong-finger. These are
+same-host historical diagnostics with variable host load, not GNOME measurements.
+Ten selected suites passed (private-bus tests require sockets outside the local
+sandbox); five selected address/undefined-behavior/leak sanitizer suites passed.
+CI includes the new surface test. No templates, thresholds, PAM or service policy
+change; existing native system enrollment remains compatible. Prepare/review an
+update package before a separate user-approved installation and repeat real
+genuine/wrong-finger, password fallback and suspend checks.
 
 Prepared update packages now use `0.2+git.COMMITCOUNT.HASH`, rather than hash-only
 versions that can sort backwards. Descendant checkpoints on this branch therefore

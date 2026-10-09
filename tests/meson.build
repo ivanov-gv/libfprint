@@ -32,6 +32,14 @@ if 'egis0575' in drivers
 endif
 
 if get_option('egis0575_ridge')
+  surface_test = executable('test-egis0575-surface',
+    'test-egis0575-surface.cpp',
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: [gio_dep, mathlib_dep] + ridge_deps,
+    install: false)
+  test('egis0575-surface', surface_test,
+    env: ['G_DEBUG=fatal-warnings', 'G_MESSAGES_DEBUG='],
+    suite: ['drivers', 'egis0575'])
   test('egis0575-package', python3,
     args: [files('test-egis0575-package.py')],
     suite: ['drivers', 'egis0575'])

@@ -82,6 +82,15 @@ an approved update: `--no-upgrade` would prevent updating this installed package
 Review that only this trial package changes. No re-enrollment or PAM/GDM change is
 part of the performance update; repeat genuine/wrong-finger and suspend checks.
 
+The user subsequently installed the first speed update (`ae5de72c`) and reported
+GNOME unlock "Much better". The next optimization reuses per-comparison FFT
+correlation transforms and reduces initial-contact polling waits, not the settling
+gate or verification-sample spacing. On two historical replays it reduced median
+genuine matcher time by about 22-24% and full wrong-finger search by about 30%, with
+all 32 decisions agreeing with the installed version. This is not measured live
+unlock latency or fresh validation. The next package is prepared separately; no
+system service is changed by building/testing it. Existing enrollment is compatible.
+
 For another installation, repeat the physical same-daemon lifecycle and
 wrong-finger gates BEFORE installation. A separate session started after wake
 does not test that lifecycle. The private harness does not test real system

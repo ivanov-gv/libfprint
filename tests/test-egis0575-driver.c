@@ -307,6 +307,28 @@ test_clean_reactivation (void)
   g_object_unref (parent_cancel);
 }
 
+static void
+test_polling_policy (void)
+{
+  FpDeviceEgis0575 *self = new_device (GOOD);
+  const gint64 now = 1000000;
+
+  self->image_state = FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_ON;
+  g_assert_cmpuint (frame_interval (self, now), ==, 20);
+  self->image_state = FPI_IMAGE_DEVICE_STATE_CAPTURE;
+  self->settle_until = now + 250000;
+  g_assert_cmpuint (frame_interval (self, now), ==, 80);
+  g_assert_cmpuint (frame_interval (self, now + 240000), ==, 10);
+  g_assert_cmpuint (frame_interval (self, now + 249999), ==, 1);
+  g_assert_cmpuint (frame_interval (self, self->settle_until), ==, 80);
+  self->sample_count = 1;
+  g_assert_cmpuint (frame_interval (self, now), ==, 80);
+  self->image_state = FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF;
+  g_assert_cmpuint (frame_interval (self, now), ==, 80);
+  g_object_unref (self);
+  g_object_unref (parent_cancel);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -321,5 +343,6 @@ main (int argc, char **argv)
   g_test_add_data_func ("/egis0575/capture-cancel", GINT_TO_POINTER (CANCEL_COMPARISON), test_capture);
   g_test_add_func ("/egis0575/initial-cancel", test_initial_cancel);
   g_test_add_func ("/egis0575/clean-reactivation", test_clean_reactivation);
+  g_test_add_func ("/egis0575/polling-policy", test_polling_policy);
   return g_test_run ();
 }
