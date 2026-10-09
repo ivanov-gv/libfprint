@@ -216,7 +216,7 @@ service and has not been installed.
 
 ### Release the claim but keep the handle open
 
-The next isolation experiment is `detector-suspend-unclaimed`. It releases the
+The `detector-suspend-unclaimed` isolation experiment releases the
 exclusive interface claim but keeps the USB handle open throughout the manual
 sleep test. Linux's [USB power-management documentation](https://docs.kernel.org/driver-api/usb/power-management.html)
 states that an open usbfs file makes a device non-idle even without I/O. Keeping
@@ -243,8 +243,21 @@ After resume, timeout or cancellation, it attempts to reclaim without stealing,
 restore capture, release and close. Wait for cleanup before `fprintd-verify`.
 Restoration failures now identify the last attempted opcode/register, exchange
 count and known busy-bit state; no raw replies or fingerprint data are printed.
-The unclaimed-handle variant still needs physical validation. It is not a daemon
-and has not been installed or enabled for GNOME.
+On 2026-10-09, the owner explicitly confirmed touch wake in one unclaimed-handle
+trial. The empty reader measured mean 115.2, texture 14.4 and DC 32 after one
+exposure check; the detector measured reference 3, DC 11/20, mean 103 and
+threshold 183. Clock evidence indicated approximately 2.48 seconds asleep.
+Capture restoration succeeded. Immediate repeat attempts refused to run because
+fprintd was active; those refusals are ownership protection, not failed wake
+trials. Normal fingerprint verification after this particular trial has not yet
+been reported.
+
+This supports retaining the open handle without an exclusive interface claim,
+but does not establish runtime autosuspend as the sole cause: the unsuccessful
+closed-handle trial slept longer and used different measured calibration values.
+Repeat longer suspend trials and post-resume verification are still needed.
+The probe is not a daemon and has not been installed or enabled for GNOME;
+automatic arming and a race-safe authentication handoff remain development work.
 
 Run the modes one at a time:
 

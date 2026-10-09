@@ -16,13 +16,18 @@ owner woke by keyboard after approximately 20.61 seconds asleep; bounded capture
 restoration failed, but normal fprintd verification afterward matched. These
 results do not establish repeatable unattended suspend or awake screen wake.
 
-The next `detector-suspend-unclaimed` experiment releases the exclusive claim
+The `detector-suspend-unclaimed` experiment releases the exclusive claim
 while retaining an open USB handle, separating ownership from close/runtime-PM
 effects. [Linux documents](https://docs.kernel.org/driver-api/usb/power-management.html)
 that an open usbfs file prevents the device being considered idle even without
 I/O. Runtime autosuspend is a hypothesis, not a proven explanation for this
 sensor. This experiment sends no USB traffic while waiting, changes no permanent
-power settings, and still requires manual suspend and physical wake confirmation.
+power settings, and still requires manual suspend. The owner explicitly confirmed
+touch wake in one trial on 2026-10-09: approximately 2.48 seconds asleep,
+reference 3, DC 11/20, mean 103 and threshold 183. Capture restoration succeeded.
+Normal fingerprint verification afterward is still awaiting confirmation, as
+are repeated longer suspend trials. Two immediate repeat attempts were rejected
+because fprintd was active; these are safety refusals, not failed wake trials.
 Recovery now reports only the last command's opcode/register, exchange count and
 known busy-bit state, not raw USB replies. See EH575-TOUCH-RESEARCH.md for the full
 command and cleanup/fallback procedure.
@@ -239,13 +244,16 @@ Thus detector state survived one real suspend while the probe held the USB claim
 The `detector-suspend-released` variant tested whether that state and wake also
 survive releasing/closing USB before suspend, then reacquires without stealing for
 bounded capture restoration. Its owner-run trial failed as recorded above; it
-has not been installed. The new unclaimed/open-handle variant needs physical
-validation. The
+has not been installed. The unclaimed/open-handle variant subsequently produced
+one owner-confirmed touch wake with successful capture restoration, as recorded
+above. This supports keeping the handle open rather than requiring an exclusive
+claim throughout suspend, but does not establish reliable automatic operation.
+The
 probe now settles/checks exposure with the already-characterized 0–63 DC range
 before detector calibration; contact/quality gates and restoration remain intact.
-Behavior after USB reset, repeated wake reliability, release/reclaim handoff and
-awake blank-screen integration remain unverified. The full wake goal remains
-active and unachieved.
+Behavior after USB reset, repeated wake reliability, automatic release/reclaim
+handoff and awake blank-screen integration remain unverified. The full wake
+objective remains unachieved.
 No package should silently arm wake, alter PCI/ACPI policy, keep the CPU awake,
 poll during suspend, or treat a contact event as authentication.
 
@@ -323,5 +331,6 @@ a bounded lock-aware native watcher, a child supervision adapter with a real
 exit/recovery watchdog, precise verifier cancellation/hold semantics, Shell-50
 state hooks, and physical keyboard/password/sleep/disable tests. Do not install
 or enable a lock-screen companion until those integration gates are implemented
-and checked. The pending unclaimed-handle suspend trial remains a separate
-hardware gate; no result is inferred from these synthetic tests.
+and checked. The owner-confirmed unclaimed-handle suspend result is separate
+physical evidence, not a result of these synthetic tests. Longer repeated cycles,
+post-resume verification and automatic arming/handoff still need validation.
