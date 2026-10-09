@@ -281,6 +281,9 @@ suspend_when_matching (gpointer data)
 
   if (!FPI_DEVICE_EGIS0575 (test->dev)->matching)
     return G_SOURCE_CONTINUE;
+  g_autoptr(GError) error = NULL;
+  g_assert_false (fp_device_close_sync (test->dev, NULL, &error));
+  g_assert_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_BUSY);
   fp_device_suspend (test->dev, NULL, suspend_done, test);
   return G_SOURCE_REMOVE;
 }
@@ -308,7 +311,19 @@ test_suspend_worker (void)
   g_assert_error (test.error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_NOT_SUPPORTED);
   g_clear_error (&test.error);
   assert_clean (dev);
+  /* Stock fprintd clients release on the terminal suspend error, BEFORE
+   * PrepareForSleep(false). The device must really close, not lose its claim
+   * while retaining an open transport.
+   */
+  g_assert_true (fp_device_close_sync (dev, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_false (fp_device_is_open (dev));
+  g_assert_false (fp_device_open_sync (dev, NULL, &error));
+  g_assert_error (error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_BUSY);
+  g_clear_error (&error);
   g_assert_true (fp_device_resume_sync (dev, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (fp_device_open_sync (dev, NULL, &error));
   g_assert_no_error (error);
   g_assert_true (fp_device_verify_sync (dev, print, NULL, NULL, NULL, &match, NULL, &error));
   g_assert_no_error (error);

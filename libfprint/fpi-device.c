@@ -1791,6 +1791,12 @@ fpi_device_suspend (FpDevice *device)
     }
 }
 
+static void
+resume_after_close (FpDevice *device)
+{
+  fpi_device_resume_complete (device, NULL);
+}
+
 void
 fpi_device_resume (FpDevice *device)
 {
@@ -1819,10 +1825,21 @@ fpi_device_resume (FpDevice *device)
         }
       break;
 
+    case FPI_DEVICE_ACTION_CLOSE:
+      /* A client may release a completed scan while suspended. If wake
+       * races that asynchronous close, finish cleanup before returning the
+       * resume task. No driver resume handler is needed for a closed device.
+       */
+      g_signal_connect_object (priv->current_task,
+                               "notify::completed",
+                               G_CALLBACK (resume_after_close),
+                               device,
+                               G_CONNECT_SWAPPED);
+      break;
+
     default:
     case FPI_DEVICE_ACTION_PROBE:
     case FPI_DEVICE_ACTION_OPEN:
-    case FPI_DEVICE_ACTION_CLOSE:
     case FPI_DEVICE_ACTION_DELETE:
     case FPI_DEVICE_ACTION_LIST:
     case FPI_DEVICE_ACTION_CLEAR_STORAGE:

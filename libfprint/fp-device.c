@@ -922,7 +922,13 @@ fp_device_close (FpDevice           *device,
       return;
     }
 
-  if (priv->current_task || priv->is_suspended)
+  /* Closing is cleanup, not a new scan. In particular, fprintd clients
+   * release immediately when suspend cancels verification. Rejecting that
+   * close leaves an open device behind after the daemon drops the claim.
+   * A running action (including one preserved across suspend) still excludes
+   * close; the driver must have finished it before releasing the transport.
+   */
+  if (priv->current_task)
     {
       g_task_return_error (task,
                            fpi_device_error_new (FP_DEVICE_ERROR_BUSY));
@@ -975,8 +981,9 @@ fp_device_close_finish (FpDevice     *device,
  * If an ongoing operation must be cancelled then it will complete with an error
  * code of #FP_DEVICE_ERROR_BUSY before the suspend async routine finishes.
  *
- * Any operation started while the device is suspended will fail with
- * #FP_DEVICE_ERROR_BUSY, this includes calls to open or close the device.
+ * New operations started while the device is suspended will fail with
+ * #FP_DEVICE_ERROR_BUSY, including open. Closing is allowed for cleanup once
+ * any ongoing operation has finished; close does not resume the device.
  */
 void
 fp_device_suspend (FpDevice           *device,

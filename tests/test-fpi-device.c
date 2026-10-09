@@ -994,6 +994,85 @@ test_driver_close_error (void)
 }
 
 static void
+delayed_close (FpDevice *device)
+{
+  FPI_DEVICE_FAKE (device)->last_called_function = delayed_close;
+}
+
+typedef struct
+{
+  gboolean closed;
+  gboolean resumed;
+  GError  *close_error;
+} CloseResumeTest;
+
+static void
+close_suspended_done (GObject *source, GAsyncResult *result, gpointer data)
+{
+  CloseResumeTest *test = data;
+
+  fp_device_close_finish (FP_DEVICE (source), result, &test->close_error);
+  test->closed = TRUE;
+}
+
+static void
+resume_close_done (GObject *source, GAsyncResult *result, gpointer data)
+{
+  CloseResumeTest *test = data;
+  g_autoptr(GError) error = NULL;
+
+  g_assert_true (fp_device_resume_finish (FP_DEVICE (source), result, &error));
+  g_assert_no_error (error);
+  g_assert_false (fp_device_is_open (FP_DEVICE (source)));
+  test->resumed = TRUE;
+}
+
+static void
+test_driver_close_suspended (gconstpointer data)
+{
+  g_autoptr(FpAutoResetClass) dev_class = auto_reset_device_class ();
+  g_autoptr(FpAutoCloseDevice) device = auto_close_fake_device_new ();
+  g_autoptr(GError) error = NULL;
+  void (*orig_close) (FpDevice *) = dev_class->close;
+  CloseResumeTest test = {0};
+
+  g_assert_true (fp_device_suspend_sync (device, NULL, &error));
+  g_assert_no_error (error);
+  dev_class->close = delayed_close;
+  fp_device_close (device, NULL, close_suspended_done, &test);
+  g_assert_cmpint (fpi_device_get_current_action (device), ==, FPI_DEVICE_ACTION_CLOSE);
+
+  /* Wake can arrive before the asynchronous transport close completes. */
+  fp_device_resume (device, NULL, resume_close_done, &test);
+  while (g_main_context_iteration (NULL, FALSE))
+    continue;
+  g_assert_false (test.closed);
+  g_assert_false (test.resumed);
+  g_assert_cmpint (fpi_device_get_current_action (device), ==, FPI_DEVICE_ACTION_CLOSE);
+  fpi_device_close_complete (device, data ? fpi_device_error_new (FP_DEVICE_ERROR_GENERAL) : NULL);
+  while (g_main_context_iteration (NULL, FALSE))
+    continue;
+  g_assert_true (test.closed);
+  g_assert_true (test.resumed);
+  if (data)
+    g_assert_error (test.close_error, FP_DEVICE_ERROR, FP_DEVICE_ERROR_GENERAL);
+  else
+    g_assert_no_error (test.close_error);
+  g_clear_error (&test.close_error);
+  g_assert_false (fp_device_is_open (device));
+  g_assert_cmpint (fpi_device_get_current_action (device), ==, FPI_DEVICE_ACTION_NONE);
+  g_assert_true (fp_device_open_sync (device, NULL, &error));
+  g_assert_no_error (error);
+  /* A fresh suspend/resume pair proves the previous resume task was cleared. */
+  g_assert_true (fp_device_suspend_sync (device, NULL, &error));
+  g_assert_no_error (error);
+  g_assert_true (fp_device_resume_sync (device, NULL, &error));
+  g_assert_no_error (error);
+  /* Restore real fake-close before automatic cleanup. */
+  dev_class->close = orig_close;
+}
+
+static void
 test_driver_enroll (void)
 {
   g_autoptr(GError) error = NULL;
@@ -4109,6 +4188,8 @@ main (int argc, char *argv[])
   g_test_add_func ("/driver/open/error", test_driver_open_error);
   g_test_add_func ("/driver/close", test_driver_close);
   g_test_add_func ("/driver/close/error", test_driver_close_error);
+  g_test_add_data_func ("/driver/close/suspended-resume-race", NULL, test_driver_close_suspended);
+  g_test_add_data_func ("/driver/close/suspended-resume-race-error", GINT_TO_POINTER (1), test_driver_close_suspended);
   g_test_add_func ("/driver/enroll", test_driver_enroll);
   g_test_add_func ("/driver/enroll/error", test_driver_enroll_error);
   g_test_add_func ("/driver/enroll/error/no_print", test_driver_enroll_error_no_print);
