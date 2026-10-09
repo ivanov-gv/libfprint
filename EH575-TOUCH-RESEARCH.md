@@ -8,6 +8,9 @@ only; it does not know how to arm the sensor's low-power touch detector.
 An uninstalled, explicitly selected `detector` probe now measures and arms a
 cross-checked volatile detector path for **awake-only** observation. It is not a
 wake service or proof of suspend wake, and is not called by libfprint/fprintd.
+Following a successful owner-run detector/restoration test, a separate explicit
+`detector-suspend --allow-suspend-test` mode is available for manual real-suspend
+observation. It is also uninstalled, experimental, and not automatic wake support.
 
 ## Missing pieces and intended handoff
 
@@ -47,7 +50,8 @@ terminal, WITHOUT sudo. Close private fprintd sessions and other fingerprint
 clients. Let system fprintd exit normally when idle; the runner refuses an active
 daemon or a failed status check. Do not stop system authentication services.
 An exclusive interface claim provides a further guard against another USB owner;
-the probe never steals it. Do not lock or suspend while a probe owns the reader.
+the probe never steals it. Do not lock or suspend while an **awake** probe owns
+the reader. The explicitly opted-in suspend experiment below is the only exception.
 Ctrl+C cancels pending USB reads and attempts normal release/close.
 
 ### New detector probe (awake only)
@@ -86,6 +90,53 @@ on that result. Uncatchable termination/disconnection cannot guarantee cleanup;
 normal driver initialization is still needed on the next claim. No enrollment or
 persistent capture calibration is accessed. Share the printed output, not images.
 
+### Measured-detector real-suspend experiment
+
+Prerequisites: the awake detector probe must succeed and report successful capture
+restoration; normal `fprintd-verify` must still match. Both were owner-confirmed
+on 2026-10-09. Keep keyboard/power-button wake and password login available.
+The existing optional wake-permission package/service must already be installed.
+This test does not install or enable a boot service and never suspends automatically.
+
+In the first terminal, with private fingerprint sessions closed and system fprintd
+already idle, run:
+
+```sh
+sudo systemctl start eh575-wakeup.service
+sudo /usr/libexec/eh575-wakeup reapply
+python3 scripts/eh575-touch.py detector-suspend --allow-suspend-test \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root
+```
+
+The Python/C probe still runs **without sudo**; the first two commands use only
+the existing, opt-in permission helper. The runner requires an inactive fprintd,
+active permission service, one tested reader, and enabled reader/hub/platform wake
+permission. It refuses rather than changing any of those policies itself.
+
+Keep the sensor empty until `SUSPEND TEST READY`. An already-latched touch aborts
+before this point. Within 120 awake seconds, use the desktop menu or run
+`systemctl suspend` in a **second terminal**. Wait until the laptop is genuinely
+asleep, then touch the sensor once. If it does not wake after about 15 seconds,
+use keyboard/power-button wake. Do not touch during the arming/pre-suspend period:
+that could latch a premature event and invalidate the test.
+
+While waiting, the probe retains its exclusive USB claim so no competing client
+can overwrite the armed state, but sends **no USB transfers**. It does not hold a
+sleep inhibitor, poll fingerprint images, block host suspend or set a wake timer.
+It only samples clocks while the host is awake; userspace cannot do this in sleep.
+On resume, a BOOTTIME/MONOTONIC elapsed-time difference of at least two seconds
+triggers the same bounded detector-exit/capture restoration, then releases/closes
+the reader. Wait for that restoration before using fingerprint login; password
+fallback remains available. If USB resets/disconnects, restoration may fail and
+must not be reported as success. A normal driver claim will initialize again.
+
+Timeout/Ctrl+C also attempts restoration. Uncatchable termination cannot guarantee
+cleanup. Clock evidence distinguishes host sleep from an awake wait but **does not
+identify what woke the laptop**: report whether touch worked or fallback wake was
+needed, the printed output, normal verification afterward, and optionally the
+fresh `journalctl -b -u systemd-suspend.service` cycle. This is not an unattended
+GNOME integration and does not establish wake-on-touch until physically verified.
+
 Run the modes one at a time:
 
 ```sh
@@ -117,8 +168,10 @@ saved. On a poor idle exposure the test may time out; first do a normal successf
 empty-start `fprintd-verify`, then let the daemon exit and repeat. No image or
 matching thresholds are lowered to force contact.
 
-All modes have a 45-second overall transfer/observation deadline (detector recovery
-has its own five-second budget), bounded transfer
+Awake modes have a 45-second overall transfer/observation deadline. The explicit
+suspend experiment uses that budget for setup, then 120 awake seconds for manual
+suspend/resume observation; detector recovery has its own five-second budget.
+All modes use bounded transfer
 timeouts, strict tested-revision/endpoint/reply/framing checks, and cleanup on
 errors. Any initialization/acquisition change is volatile; the installed driver
 will initialize normally on its next claim. No system power policies are changed
@@ -139,6 +192,13 @@ successfully detected CONTACT and RELEASE. This establishes an awake polling lea
 not a hardware interrupt or low-power wake mode. Two subsequent explicit s2idle
 trials did not wake on touch; see EH575-GNOME-TRIAL.md. Static wake-mode research
 and the new pre/post sleep metadata are described in doc/egis0575-wake-research.md.
+
+The owner-run calibrated detector trial measured reference 3, DC 11/20, mean 100
+and threshold 180. Empty register-`0x01` status was zero; touch changed it to `0x04`,
+which stayed latched after lift. Both interrupt endpoints remained silent in all
+three phases. Detector exit/capture initialization succeeded, followed by a real
+normal `fprintd-verify` match. This proves the measured detector responds on this
+unit and ordinary matching recovers, not that it signals host wake in suspend.
 
 The real revision-1072 reader passed the `open` probe: discovery, descriptor
 checks, exclusive claim, release and close. Ridge and default-image builds passed

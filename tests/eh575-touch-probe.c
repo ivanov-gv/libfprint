@@ -7,6 +7,7 @@
 #include <glib-unix.h>
 #include <stdio.h>
 #include <unistd.h>
+#include <time.h>
 #include "egis0575-touch.h"
 #include "egis0575-detector.h"
 
@@ -294,7 +295,59 @@ out:
 }
 
 static gboolean
-detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error)
+sample_clocks (uint64_t *boot, uint64_t *mono, GError **error)
+{
+  struct timespec b, m;
+  if (clock_gettime (CLOCK_BOOTTIME, &b) || clock_gettime (CLOCK_MONOTONIC, &m))
+    {
+      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Cannot read suspend-aware clocks");
+      return FALSE;
+    }
+  *boot = (uint64_t) b.tv_sec * 1000000 + b.tv_nsec / 1000;
+  *mono = (uint64_t) m.tv_sec * 1000000 + m.tv_nsec / 1000;
+  return TRUE;
+}
+
+static gboolean
+wait_for_suspend (GCancellable *cancel, GError **error)
+{
+  uint64_t start_boot, start_mono, boot, mono;
+  if (!sample_clocks (&start_boot, &start_mono, error))
+    return FALSE;
+  /* This deadline measures awake time: the process is frozen during host sleep.
+   * No USB polling, inhibitor, automatic suspend, synthetic input or wake timer.
+   */
+  deadline = g_get_monotonic_time () + 120000000;
+  g_print ("SUSPEND TEST READY: detector armed; USB traffic stopped.\n"
+           "Within 120 awake seconds, suspend using the menu or 'systemctl suspend' in ANOTHER terminal.\n"
+           "Wait until truly asleep, then touch the sensor once. If no wake after 15 seconds, use the keyboard or power button.\n"
+           "Do not run fingerprint clients. Capture restoration runs after resume; wait for it before testing login.\n");
+  fflush (stdout);
+  while (g_get_monotonic_time () < deadline)
+    {
+      pump_signals ();
+      if (g_cancellable_is_cancelled (cancel))
+        {
+          g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_CANCELLED, "Suspend observation cancelled");
+          return FALSE;
+        }
+      if (!sample_clocks (&boot, &mono, error))
+        return FALSE;
+      uint64_t slept = eh575_detector_sleep_elapsed (start_boot, start_mono, boot, mono);
+      if (slept >= 2000000)
+        {
+          g_print ("Resume observed: approximately %.2f seconds asleep. Clocks do NOT identify the wake source.\n",
+                   slept / 1000000.0);
+          return TRUE;
+        }
+      g_usleep (100000);
+    }
+  g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT, "No sleep interval of at least two seconds observed; restoring capture");
+  return FALSE;
+}
+
+static gboolean
+detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean suspend_test)
 {
   ProbeIO io = {usb, cancel, error};
   Eh575Detector detector;
@@ -319,8 +372,24 @@ detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error)
            detector.reference, detector.dc_p, detector.dc_c, detector.mean, detector.threshold);
   if (!eh575_detector_enter (&detector, detector_io, &io))
     goto out;
-  g_print ("Volatile detector armed for AWAKE testing. Do NOT suspend.\n");
-  ok = interrupt_probe (usb, cancel, error, TRUE);
+  if (suspend_test)
+    {
+      const Eh575Command status = {7, {'E', 'G', 'I', 'S', 0x60, 1, 0}};
+      uint8_t reply[64];
+      if (!eh575_detector_io (detector_io, &io, &status, reply))
+        goto out;
+      if (reply[5] & 0x04)
+        {
+          g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Touch already latched before suspend; detector test aborted. Leave empty and retry");
+          goto out;
+        }
+      ok = wait_for_suspend (cancel, error);
+    }
+  else
+    {
+      g_print ("Volatile detector armed for AWAKE testing. Do NOT suspend.\n");
+      ok = interrupt_probe (usb, cancel, error, TRUE);
+    }
 out:
   memset (frame, 0, sizeof frame);
   memset (&detector, 0, sizeof detector);
@@ -346,12 +415,14 @@ out:
 int
 main (int argc, char **argv)
 {
-  const char *mode = argc == 2 ? argv[1] : "";
-  gboolean initialized = !strcmp (mode, "interrupt-initialized") || !strcmp (mode, "touch") || !strcmp (mode, "detector");
+  const char *mode = argc >= 2 ? argv[1] : "";
+  gboolean suspend_test = !strcmp (mode, "detector-suspend");
+  gboolean initialized = !strcmp (mode, "interrupt-initialized") || !strcmp (mode, "touch") || !strcmp (mode, "detector") || suspend_test;
 
-  if (argc != 2 || (!initialized && strcmp (mode, "interrupt") && strcmp (mode, "open")) || geteuid () == 0)
+  if ((suspend_test ? argc != 3 || strcmp (argv[2], "--allow-suspend-test") : argc != 2) ||
+      (!initialized && strcmp (mode, "interrupt") && strcmp (mode, "open")) || geteuid () == 0)
     {
-      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch|detector\n");
+      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch|detector OR detector-suspend --allow-suspend-test\n");
       return 2;
     }
   g_autoptr(GError) error = NULL;
@@ -404,8 +475,8 @@ main (int argc, char **argv)
         if (!command (usb, &eh575_init_commands[i], cancel, &error))
           goto out;
     }
-  if (!strcmp (mode, "detector"))
-    ok = detector_probe (usb, cancel, &error);
+  if (!strcmp (mode, "detector") || suspend_test)
+    ok = detector_probe (usb, cancel, &error, suspend_test);
   else
     ok = !strcmp (mode, "touch") ? touch_probe (usb, cancel, &error) : interrupt_probe (usb, cancel, &error, FALSE);
 out:

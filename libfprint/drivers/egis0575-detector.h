@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Experimental, volatile detector protocol facts, not vendor implementation.
  * Cross-check: pinned Acer 3.7.1.1 binary and published 575-[0-3] USB traces.
- * Only for the isolated revision-1072 awake probe; not used by authentication.
+ * Only for isolated revision-1072 probes; not used by authentication.
  */
 #pragma once
 #include "egis0575.h"
@@ -13,6 +13,18 @@ typedef struct
   uint8_t reference, dc_p, dc_c, mean, threshold;
   int ready;
 } Eh575Detector;
+
+/* CLOCK_BOOTTIME includes host sleep; CLOCK_MONOTONIC does not. Units must match.
+ * A positive difference is sleep evidence, never identification of its wake source.
+ */
+static inline uint64_t
+eh575_detector_sleep_elapsed (uint64_t start_boot, uint64_t start_mono, uint64_t boot, uint64_t mono)
+{
+  if (boot < start_boot || mono < start_mono)
+    return 0;
+  uint64_t b = boot - start_boot, m = mono - start_mono;
+  return b > m ? b - m : 0;
+}
 
 static inline int
 eh575_detector_io (Eh575DetectorIO io, void *context, const Eh575Command *cmd, uint8_t *reply)

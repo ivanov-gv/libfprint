@@ -144,6 +144,17 @@ restore_failures (void)
     }
 }
 
+static void
+sleep_evidence (void)
+{
+  g_assert_cmpuint (eh575_detector_sleep_elapsed (100, 70, 1100, 1070), ==, 0);
+  g_assert_cmpuint (eh575_detector_sleep_elapsed (100, 70, 6100, 1070), ==, 5000);
+  g_assert_cmpuint (eh575_detector_sleep_elapsed (100, 70, 99, 1070), ==, 0);
+  g_assert_cmpuint (eh575_detector_sleep_elapsed (100, 70, 6100, 69), ==, 0);
+  g_assert_cmpuint (eh575_detector_sleep_elapsed (100, 70, 1100, 1071), ==, 0);
+  g_assert_cmpuint (eh575_detector_sleep_elapsed (0, 0, UINT64_MAX, UINT64_MAX), ==, 0);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -153,5 +164,6 @@ main (int argc, char **argv)
   g_test_add_func ("/eh575/detector/busy-bounded", busy_bounded);
   g_test_add_func ("/eh575/detector/failures", failures);
   g_test_add_func ("/eh575/detector/restore-failures", restore_failures);
+  g_test_add_func ("/eh575/detector/sleep-evidence", sleep_evidence);
   return g_test_run ();
 }

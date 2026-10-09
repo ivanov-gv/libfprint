@@ -194,12 +194,24 @@ of those paths on this unit, event transport and actual idle/suspend sequencing.
 Those remaining pieces prevent treating this as a wake recipe or automatically
 arming the installed reader during system suspend.
 
-An uninstalled awake-only `eh575-touch.py detector` experiment now implements the
+An uninstalled `eh575-touch.py detector` experiment now implements the
 cross-checked entry/exit with freshly measured statistics, a strict tested-device
 gate, bounded transfers/calibration and independent cancellation recovery. See
 EH575-TOUCH-RESEARCH.md. Synthetic failure-injection tests cover the protocol and
 recovery paths. It is not integrated into libfprint, system sleep hooks or the
-package; a successful physical detector/restore test is still required before
-designing a suspend experiment. The wake goal remains unverified.
+package. The owner's physical trial measured reference 3, DC 11/20, mean 100 and
+threshold 180: empty status was zero, touch set `0x04`, and lift did not clear it.
+No interrupt packets arrived. Detector exit/capture initialization succeeded and
+normal `fprintd-verify` matched afterward. These results validate this unit's
+awake detector and capture recovery, not suspend wake.
+
+The explicitly opted-in `detector-suspend --allow-suspend-test` experiment now
+uses that measured path, retains exclusive ownership without USB traffic while
+waiting for a manual suspend, and restores after clock evidence of resume. It
+never suspends automatically, writes wake policy or installs a watcher. The
+existing opt-in permission service must already be active. See
+EH575-TOUCH-RESEARCH.md for prerequisites, fallback and evidence boundaries.
+Physical wake source, detector-state retention through suspend and behavior after
+USB reset remain unverified. The full wake goal remains active and unachieved.
 No package should silently arm wake, alter PCI/ACPI policy, keep the CPU awake,
 poll during suspend, or treat a contact event as authentication.

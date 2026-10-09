@@ -28,10 +28,13 @@ class RunnerPolicy(unittest.TestCase):
         (self.build / "tests").mkdir()
         (self.build / "tests/eh575-touch-probe").touch()
 
-    def invoke(self, mode="touch", uid=1000, status=3):
-        with patch.object(sys, "argv", ["eh575-touch.py", mode, "--build", str(self.build)]), \
+    def invoke(self, mode="touch", uid=1000, status=3, permit=False, wake_status=0, wake_error=None):
+        responses = [subprocess.CompletedProcess([], status), subprocess.CompletedProcess([], wake_status)]
+        arguments = ["eh575-touch.py", mode, "--build", str(self.build)] + (["--allow-suspend-test"] if permit else [])
+        with patch.object(sys, "argv", arguments), \
                 patch.object(runner.os, "geteuid", return_value=uid), \
-                patch.object(runner.subprocess, "run", return_value=subprocess.CompletedProcess([], status)), \
+                patch.object(runner.subprocess, "run", side_effect=responses), \
+                patch.object(runner, "wake_ready", side_effect=wake_error), \
                 patch.object(sys, "stderr", new_callable=io.StringIO), \
                 patch.object(runner.os, "execve") as execute:
             try:
@@ -64,6 +67,16 @@ class RunnerPolicy(unittest.TestCase):
                 self.assertNotIn("LIBUSB_DEBUG", call.args[2])
                 self.assertEqual(call.args[2]["LD_LIBRARY_PATH"], "")
         self.assertEqual({item.name for item in self.build.iterdir()}, {"meson-info", "tests"})
+
+    def test_suspend_opt_in_and_wake_guards(self):
+        self.assertEqual(self.invoke(mode="detector-suspend")[0], 2)
+        self.assertEqual(self.invoke(permit=True)[0], 2)
+        for arguments in ({"uid": 0}, {"status": 0}, {"wake_status": 3},
+                          {"wake_error": ValueError("Wake disabled")}, {"wake_error": OSError("Unreadable metadata")}):
+            self.assertEqual(self.invoke(mode="detector-suspend", permit=True, **arguments)[0], 2)
+        code, call = self.invoke(mode="detector-suspend", permit=True)
+        self.assertIsNone(code)
+        self.assertEqual(call.args[1], [str(self.build / "tests/eh575-touch-probe"), "detector-suspend", "--allow-suspend-test"])
 
 
 if __name__ == "__main__":
