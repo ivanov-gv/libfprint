@@ -5,6 +5,10 @@ touch-to-activate a blanked GNOME lock screen are requirements. Neither is claim
 working by these diagnostics. The current package changes USB wake permission
 only; it does not know how to arm the sensor's low-power touch detector.
 
+An uninstalled, explicitly selected `detector` probe now measures and arms a
+cross-checked volatile detector path for **awake-only** observation. It is not a
+wake service or proof of suspend wake, and is not called by libfprint/fprintd.
+
 ## Missing pieces and intended handoff
 
 The stationary driver detects contact from explicitly requested images during an
@@ -46,6 +50,42 @@ An exclusive interface claim provides a further guard against another USB owner;
 the probe never steals it. Do not lock or suspend while a probe owns the reader.
 Ctrl+C cancels pending USB reads and attempts normal release/close.
 
+### New detector probe (awake only)
+
+```sh
+python3 scripts/eh575-touch.py detector \
+  --build /tmp/eh575-libfprint-ridge-build --deps /tmp/eh575-native-deps/root
+```
+
+Keep the reader empty from the start. This mode first requires three empty-image
+quality checks. It then uses volatile detector calibration (`0x34`/`0x35`), reads
+the measured analogue values and adjusts the detection DC using sensor statistics.
+The threshold is the measured mean plus the OEM's margin of 80, not the values
+from another person's USB trace. Zero DC, invalid statistics, busy timeout and
+any malformed/failed command reply stop the operation. The calibration loop and
+each status wait are bounded; no firmware or nonvolatile storage is written.
+
+The entry bank and its exit have been cross-checked against the hash-pinned Acer
+driver and all four published Windows capture traces. That supports an isolated
+experiment on the gated revision-1072 unit, not deployment or a claim that the
+unobserved Windows suspend path is reproduced. A different sensor variant or a
+software-statistics fallback is not automatically selected.
+
+After `Volatile detector armed`, follow the same empty/touch/lift six-second
+phases. The probe counts interrupt packets and reports register-`0x01` status
+changes; it does not interpret a bit as authentication. Status changes without
+interrupt packets would also be useful evidence. Do **not** suspend, lock the
+session, run fingerprint clients or touch until asked during this probe.
+
+After success, failure or Ctrl+C following calibration, a separate five-second
+recovery budget attempts detector exit and the characterized 47-command capture
+initialization, even when the operation's cancellation token is set. Confirm
+`Detector exited; characterized capture initialization restored`, then test normal
+`fprintd-verify`. A failed restore is explicitly reported; never proceed to suspend
+on that result. Uncatchable termination/disconnection cannot guarantee cleanup;
+normal driver initialization is still needed on the next claim. No enrollment or
+persistent capture calibration is accessed. Share the printed output, not images.
+
 Run the modes one at a time:
 
 ```sh
@@ -77,7 +117,8 @@ saved. On a poor idle exposure the test may time out; first do a normal successf
 empty-start `fprintd-verify`, then let the daemon exit and repeat. No image or
 matching thresholds are lowered to force contact.
 
-All modes have a 45-second overall transfer/observation deadline, bounded transfer
+All modes have a 45-second overall transfer/observation deadline (detector recovery
+has its own five-second budget), bounded transfer
 timeouts, strict tested-revision/endpoint/reply/framing checks, and cleanup on
 errors. Any initialization/acquisition change is volatile; the installed driver
 will initialize normally on its next claim. No system power policies are changed
@@ -109,3 +150,9 @@ rejection, contact/clipping gates and runner safeguards. They do not exercise a
 physical reader, prove exclusive-claim races are harmless, demonstrate wake during
 suspend, establish battery impact, or test a GNOME extension. Do not publish these
 tools as completed wake-on-touch support.
+
+Detector synthetic tests additionally cover trace-derived command ordering,
+measured thresholds, zero/underflow rejection, invalid statistics, bounded busy
+polls, failure/malformed-reply injection at every calibration step, and restoration
+after partial entry/calibration. They also reject failed restoration at every
+transfer. These validate software control flow, not physical touch or USB wake.

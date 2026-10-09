@@ -1,15 +1,30 @@
 /* SPDX-License-Identifier: LGPL-2.1-or-later
  * Isolated unprivileged research, not a wake daemon or authenticator.
- * Reads only tested interrupt endpoints or uses characterized acquisition.
- * No speculative register writes, reset, firmware upload, images or templates saved.
+ * Detector mode adds cross-checked volatile detector calibration/entry/exit.
+ * No reset, firmware/NVM upload, images or templates saved.
  */
 #include <gusb.h>
 #include <glib-unix.h>
 #include <stdio.h>
 #include <unistd.h>
 #include "egis0575-touch.h"
+#include "egis0575-detector.h"
 
 static gint64 deadline;
+
+typedef struct
+{
+  GUsbDevice *usb;
+  GCancellable *cancel;
+  GError **error;
+} ProbeIO;
+
+static void
+pump_signals (void)
+{
+  while (g_main_context_iteration (NULL, FALSE))
+    ;
+}
 
 static guint
 remaining (guint maximum)
@@ -26,33 +41,48 @@ cancel_probe (gpointer data)
   return G_SOURCE_CONTINUE;
 }
 
-static gboolean
-command (GUsbDevice *usb, const Eh575Command *cmd, GCancellable *cancel, GError **error)
+static int
+detector_io (void *context, const Eh575Command *cmd, uint8_t *reply, size_t *reply_length)
 {
-  uint8_t bytes[20], reply[512];
+  ProbeIO *io = context;
+  uint8_t bytes[20];
   gsize length = 0;
 
+  pump_signals ();
   if (g_get_monotonic_time () >= deadline)
     {
-      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT, "Probe deadline expired");
+      g_set_error_literal (io->error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT, "Probe deadline expired");
       return FALSE;
     }
+  if (cmd->length < 7 || cmd->length > sizeof bytes)
+    return FALSE;
   memcpy (bytes, cmd->data, cmd->length);
-  if (!g_usb_device_bulk_transfer (usb, EH575_EP_OUT, bytes, cmd->length, &length, remaining (500), cancel, error))
+  if (!g_usb_device_bulk_transfer (io->usb, EH575_EP_OUT, bytes, cmd->length, &length, remaining (500), io->cancel, io->error))
     return FALSE;
   if (length != cmd->length)
     {
-      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Short command write");
+      g_set_error_literal (io->error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Short command write");
       return FALSE;
     }
-  if (!g_usb_device_bulk_transfer (usb, EH575_EP_IN, reply, sizeof reply, &length, remaining (500), cancel, error))
+  if (!g_usb_device_bulk_transfer (io->usb, EH575_EP_IN, reply, 64, &length, remaining (500), io->cancel, io->error))
     return FALSE;
+  *reply_length = length;
   if (!eh575_reply_valid (cmd, reply, length))
     {
-      g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Unexpected initialization/rearm reply");
+      g_set_error_literal (io->error, G_IO_ERROR, G_IO_ERROR_INVALID_DATA, "Unexpected command reply");
       return FALSE;
     }
+  g_usleep (2000);
   return TRUE;
+}
+
+static gboolean
+command (GUsbDevice *usb, const Eh575Command *cmd, GCancellable *cancel, GError **error)
+{
+  ProbeIO io = {usb, cancel, error};
+  uint8_t reply[64];
+  size_t length = sizeof reply;
+  return detector_io (&io, cmd, reply, &length);
 }
 
 static gboolean
@@ -150,7 +180,7 @@ valid_interfaces (GUsbDevice *usb, GError **error)
 }
 
 static gboolean
-interrupt_probe (GUsbDevice *usb, GCancellable *cancel, GError **error)
+interrupt_probe (GUsbDevice *usb, GCancellable *cancel, GError **error, gboolean detector)
 {
   const char *phases[] = {"Keep the reader EMPTY", "TOUCH and HOLD any finger", "LIFT fully; leave the reader empty"};
   Eh575EventStats stats[2] = {0};
@@ -160,9 +190,24 @@ interrupt_probe (GUsbDevice *usb, GCancellable *cancel, GError **error)
       g_print ("Phase %zu/3: %s for six seconds.\n", phase + 1, phases[phase]);
       fflush (stdout);
       gint64 until = MIN (deadline, g_get_monotonic_time () + 6000000);
+      guint status_changes = 0, status_bits = 0;
+      gint last_status = -1;
       stats[0].packets = stats[0].changes = stats[1].packets = stats[1].changes = 0;
       while (g_get_monotonic_time () < until && !g_cancellable_is_cancelled (cancel))
-        for (guint ep = 0; ep < 2; ep++)
+        {
+          pump_signals ();
+          if (detector)
+            {
+              const Eh575Command cmd = {7, {'E', 'G', 'I', 'S', 0x60, 1, 0}};
+              uint8_t reply[64];
+              ProbeIO io = {usb, cancel, error};
+              if (!eh575_detector_io (detector_io, &io, &cmd, reply))
+                return FALSE;
+              status_changes += last_status >= 0 && last_status != reply[5];
+              last_status = reply[5];
+              status_bits |= reply[5];
+            }
+          for (guint ep = 0; ep < 2; ep++)
           {
             uint8_t packet[16];
             gsize length = 0;
@@ -181,8 +226,11 @@ interrupt_probe (GUsbDevice *usb, GCancellable *cancel, GError **error)
               }
             memset (packet, 0, sizeof packet);
           }
+        }
       for (guint ep = 0; ep < 2; ep++)
         g_print ("phase=%zu endpoint=0x%02x packets=%u payload_changes=%u\n", phase + 1, 0x83 + ep, stats[ep].packets, stats[ep].changes);
+      if (detector)
+        g_print ("phase=%zu detector_status_bits=0x%02x status_changes=%u\n", phase + 1, status_bits, status_changes);
     }
   memset (stats, 0, sizeof stats);
   return !g_cancellable_is_cancelled (cancel);
@@ -245,15 +293,65 @@ out:
   return ok;
 }
 
+static gboolean
+detector_probe (GUsbDevice *usb, GCancellable *cancel, GError **error)
+{
+  ProbeIO io = {usb, cancel, error};
+  Eh575Detector detector;
+  uint8_t frame[EH575_FRAME_SIZE];
+  gboolean ok = FALSE, changed = FALSE;
+
+  g_print ("Keep EMPTY: checking three idle frames before volatile detector calibration.\n");
+  for (guint n = 0; n < 3; n++)
+    {
+      if (!capture (usb, frame, cancel, error))
+        goto out;
+      if (!eh575_touch_idle (frame))
+        {
+          g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Reader is not empty at usable exposure; detector NOT armed");
+          goto out;
+        }
+    }
+  changed = TRUE; /* Recovery is required even if the first setup transfer fails. */
+  if (!eh575_detector_calibrate (&detector, detector_io, &io))
+    goto out;
+  g_print ("Measured detector: reference=%u DC=%u/%u mean=%u threshold=%u.\n",
+           detector.reference, detector.dc_p, detector.dc_c, detector.mean, detector.threshold);
+  if (!eh575_detector_enter (&detector, detector_io, &io))
+    goto out;
+  g_print ("Volatile detector armed for AWAKE testing. Do NOT suspend.\n");
+  ok = interrupt_probe (usb, cancel, error, TRUE);
+out:
+  memset (frame, 0, sizeof frame);
+  memset (&detector, 0, sizeof detector);
+  if (!ok && !*error)
+    g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "Detector test failed; calibration/status bounds or cancellation prevented completion");
+  if (changed)
+    {
+      g_autoptr(GError) restore_error = NULL;
+      ProbeIO recovery = {usb, NULL, &restore_error};
+      deadline = g_get_monotonic_time () + 5000000;
+      if (!eh575_detector_restore (detector_io, &recovery))
+        {
+          g_printerr ("Capture restoration FAILED: %s. Do not suspend; close the probe and test fprintd normally.\n",
+                      restore_error ? restore_error->message : "unexpected status or busy timeout");
+          ok = FALSE;
+        }
+      else
+        g_print ("Detector exited; characterized capture initialization restored.\n");
+    }
+  return ok;
+}
+
 int
 main (int argc, char **argv)
 {
   const char *mode = argc == 2 ? argv[1] : "";
-  gboolean initialized = !strcmp (mode, "interrupt-initialized") || !strcmp (mode, "touch");
+  gboolean initialized = !strcmp (mode, "interrupt-initialized") || !strcmp (mode, "touch") || !strcmp (mode, "detector");
 
   if (argc != 2 || (!initialized && strcmp (mode, "interrupt") && strcmp (mode, "open")) || geteuid () == 0)
     {
-      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch\n");
+      g_printerr ("Run WITHOUT sudo: eh575-touch-probe open|interrupt|interrupt-initialized|touch|detector\n");
       return 2;
     }
   g_autoptr(GError) error = NULL;
@@ -306,7 +404,10 @@ main (int argc, char **argv)
         if (!command (usb, &eh575_init_commands[i], cancel, &error))
           goto out;
     }
-  ok = !strcmp (mode, "touch") ? touch_probe (usb, cancel, &error) : interrupt_probe (usb, cancel, &error);
+  if (!strcmp (mode, "detector"))
+    ok = detector_probe (usb, cancel, &error);
+  else
+    ok = !strcmp (mode, "touch") ? touch_probe (usb, cancel, &error) : interrupt_probe (usb, cancel, &error, FALSE);
 out:
   if (claimed)
     {

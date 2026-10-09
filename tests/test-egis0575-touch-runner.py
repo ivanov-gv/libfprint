@@ -56,7 +56,7 @@ class RunnerPolicy(unittest.TestCase):
 
     def test_exact_modes_and_clean_environment(self):
         with patch.dict(runner.os.environ, {"LD_PRELOAD": "untrusted", "LD_LIBRARY_PATH": "untrusted", "LIBUSB_DEBUG": "4"}):
-            for mode in ("open", "interrupt", "interrupt-initialized", "touch"):
+            for mode in ("open", "interrupt", "interrupt-initialized", "touch", "detector"):
                 code, call = self.invoke(mode=mode)
                 self.assertIsNone(code)
                 self.assertEqual(call.args[1], [str(self.build / "tests/eh575-touch-probe"), mode])

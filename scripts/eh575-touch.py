@@ -10,7 +10,7 @@ import subprocess
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch"))
+    parser.add_argument("mode", choices=("open", "interrupt", "interrupt-initialized", "touch", "detector"))
     parser.add_argument("--build", type=Path, required=True)
     parser.add_argument("--deps", type=Path)
     args = parser.parse_args()

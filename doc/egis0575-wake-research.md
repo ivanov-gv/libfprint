@@ -109,6 +109,15 @@ at `0x67`; another requires software image/bad-pixel handling. The high threshol
 is derived from the measured mean plus a separate margin. Capture exposure DC
 cannot simply substitute for these fields.
 
+Further OEM inspection located that margin at VA `0x18004a7b0`: its initialized
+byte is `0x50` (80). The register-statistics path returns min/max/mean in that order.
+The two entry-variant globals at `0x18004c100`/`0x18004c104` are initialized to zero;
+their direct static references are reads, and the zero-variant command layout
+matches all four published USB traces. These facts support an isolated gated
+probe, not proof of all indirect writes or every firmware variant. The recorded
+traces use previously stored detector settings; none runs auto-calibration at
+`0x34`. On this laptop those settings must be measured, not replayed from a trace.
+
 Detector entry programs its ROI and analogue settings, enters low-power mode,
 then writes six registers in descending order starting at `0x45`. Its register
 order is low threshold, high threshold, `87`, `13`, `00`, `03`. A variant branch
@@ -179,11 +188,18 @@ The observed last wake IRQ (7, `pinctrl_amd`) does not uniquely identify the wak
 source. Later live reader permission was disabled, which must not be mistaken
 for its recorded pre/post state.
 
-Next protocol work needs the revision-1072 variant/dispatch mapping, calibration
-bounds and margin origin, the event transport and actual idle/suspend sequencing,
-and a tested reversal back to ordinary capture. The register transport is now
-cross-checked, but those remaining pieces prevent treating it as a wake recipe.
-Only once the full reversible sequence is established should an isolated opt-in
-hardware arming test be added.
+The register transport, default-variant layout, calibration margin and capture
+restoration sequence are now cross-checked. Still missing are physical validation
+of those paths on this unit, event transport and actual idle/suspend sequencing.
+Those remaining pieces prevent treating this as a wake recipe or automatically
+arming the installed reader during system suspend.
+
+An uninstalled awake-only `eh575-touch.py detector` experiment now implements the
+cross-checked entry/exit with freshly measured statistics, a strict tested-device
+gate, bounded transfers/calibration and independent cancellation recovery. See
+EH575-TOUCH-RESEARCH.md. Synthetic failure-injection tests cover the protocol and
+recovery paths. It is not integrated into libfprint, system sleep hooks or the
+package; a successful physical detector/restore test is still required before
+designing a suspend experiment. The wake goal remains unverified.
 No package should silently arm wake, alter PCI/ACPI policy, keep the CPU awake,
 poll during suspend, or treat a contact event as authentication.

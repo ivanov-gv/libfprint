@@ -6,6 +6,13 @@ if 'egis0575' in drivers
   test('egis0575-touch', touch_test,
     env: ['G_DEBUG=fatal-warnings'],
     suite: ['drivers', 'egis0575'])
+  detector_test = executable('test-egis0575-detector',
+    'test-egis0575-detector.c',
+    include_directories: include_directories('../libfprint/drivers'),
+    dependencies: [glib_dep, mathlib_dep])
+  test('egis0575-detector', detector_test,
+    env: ['G_DEBUG=fatal-warnings'],
+    suite: ['drivers', 'egis0575'])
   executable('eh575-touch-probe', 'eh575-touch-probe.c',
     include_directories: include_directories('../libfprint/drivers'),
     dependencies: [gusb_dep, mathlib_dep],
