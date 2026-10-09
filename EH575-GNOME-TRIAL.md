@@ -253,6 +253,12 @@ overriding their policy.
 
 ## Optional touch-to-wake permission trial
 
+The owner's initial trial did not wake the display. The available journal did not
+show a new system suspend after the service started, so it does not establish a
+hardware suspend-wake failure. Both a blanked screen and real suspend are now
+requirements. See [EH575-TOUCH-RESEARCH.md](EH575-TOUCH-RESEARCH.md) for isolated
+Linux-only contact/interrupt tests; the automatic integration is not implemented.
+
 The package's `eh575-wakeup.service` is opt-in; installation never enables it.
 It enables USB remote-wake permission for the tested reader and its hub ancestors
 and reapplies it just before system sleep, since libfprint can reset the policy

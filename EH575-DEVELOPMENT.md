@@ -14,6 +14,16 @@ the original upstream baseline. The GitHub `origin` is the development fork;
 
 ## Current status
 
+The next Linux-only increment adds a non-installed GUsb diagnostic for interrupt
+endpoints 83/84 before/after characterized initialization, and awake contact/release
+detection using the same strict framing and quality gates as acquisition. It
+never authenticates, stores an image/template, detaches a kernel driver, resets
+USB or tries undocumented writes. The runner refuses active system fprintd and
+the USB claim remains exclusive. Synthetic classifier/runner tests are not proof
+of sensor interrupts, suspend wake, or safe GNOME integration. A physical touch
+trial is required before building an unattended watcher that would share ownership
+with system fprintd; see EH575-TOUCH-RESEARCH.md.
+
 An opt-in USB remote-wake permission trial now accompanies the deployment package.
 It is not a driver protocol change: the root helper validates the tested revision,
 enables only the reader and its USB hub ancestors, journals rollback state in

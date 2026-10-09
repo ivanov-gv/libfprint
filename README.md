@@ -378,6 +378,14 @@ GNOME's fingerprint policy on another machine.
 
 ### Optional touch-to-wake trial
 
+Linux-only research for both suspended wake and a blanked lock screen is described
+in [EH575-TOUCH-RESEARCH.md](EH575-TOUCH-RESEARCH.md). The new isolated native probe
+can check interrupt activity with no new register commands and test awake contact
+detection using the characterized image protocol. It is not a background service
+and is not included in the deployment package. No GNOME/authentication hooks are
+installed by these probes. Both cases remain incomplete until actual touch events
+and safe ownership handoff are established; USB permission alone is not enough.
+
 Waking from suspend is separate from fingerprint matching. On the development
 laptop, the EH575 advertises USB remote wake but its own and its root hub's wake
 permissions were disabled; the PCI controller and platform wake permissions were
