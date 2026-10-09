@@ -251,6 +251,35 @@ No GNOME setting is changed automatically by this package. If an administrator
 disabled fingerprint authentication, resolve that deliberately rather than
 overriding their policy.
 
+## Optional touch-to-wake permission trial
+
+The package's `eh575-wakeup.service` is opt-in; installation never enables it.
+It enables USB remote-wake permission for the tested reader and its hub ancestors
+and reapplies it just before system sleep, since libfprint can reset the policy
+at discovery/resume. PCI/platform wake must already be enabled. No undocumented
+sensor wake command or authentication bypass is implemented. Enabling a shared
+hub can allow other attached devices to wake too.
+
+```sh
+/usr/libexec/eh575-wakeup status
+sudo systemctl start eh575-wakeup.service
+```
+
+Have password fallback and another wake method available. Lock/suspend normally,
+wait until asleep, then touch and hold. Confirm both actual wake and GNOME unlock;
+an enabled wake attribute alone proves neither. A wrong finger may wake but must
+not unlock. Repeat suspend cycles. If reliable, opt in at boot with
+`sudo systemctl enable eh575-wakeup.service`. Disable/restore with
+`sudo systemctl disable --now eh575-wakeup.service`.
+
+Original settings are stored only in a protected `/run` journal and restored on
+stop for freshly validated current reader/hub paths. Restoration failures retain
+an inactive journal and are reported; a reboot clears transient settings. Inspect
+`journalctl -b -u eh575-wakeup.service -u systemd-suspend.service` on failure.
+If touch does not wake, disable the trial: sensor-side wake arming remains an
+open protocol investigation. No hardware wake-on-touch result has been established
+for this new trial; it does not promise hibernation or powered-off wake.
+
 ## Rollback
 
 From your still-open terminal or a password-authenticated TTY:
@@ -259,7 +288,9 @@ From your still-open terminal or a password-authenticated TTY:
 sudo apt remove libfprint-eh575-experimental
 ```
 
-Dpkg removes ONLY this package's library, drop-in and docs. The removal hook reloads
+Dpkg stops/disables the optional wake service and restores its recorded policy,
+then removes this package's library, drop-in, docs and wake helper/service/hook.
+The removal hook reloads
 and try-restarts fprintd, restoring Ubuntu's original library selection. It does
 not remove fprintd/libpam-fprintd, overwrite PAM, or restart GDM. Existing system
 biometric prints are preserved, as are all private test enrollments. Keep runtime

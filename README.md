@@ -350,8 +350,10 @@ access available. Only after deliberately approving the authentication change:
 sudo apt-get --no-remove install /absolute/path/to/reviewed-package.deb
 ```
 
-Installation reloads systemd and tries to restart **fprintd only**, not GDM. The
-package contains the native library, service drop-in and documentation/metadata;
+Installation reloads systemd and tries to restart fprintd and an already-active
+optional EH575 wake service, not GDM. The wake service is never enabled or started
+by a first installation. The package contains the native library, service drop-in,
+documentation/metadata and an opt-in USB wake helper/service/sleep hook;
 no personal prints, captures, Python matcher or test authorization fixtures ship.
 
 Create a **fresh system enrollment** from a normal terminal, outside the private
@@ -374,6 +376,57 @@ wrong-finger match is a reason to stop and investigate, not lower thresholds.
 The package does not automatically enable unrelated PAM services or guarantee
 GNOME's fingerprint policy on another machine.
 
+### Optional touch-to-wake trial
+
+Waking from suspend is separate from fingerprint matching. On the development
+laptop, the EH575 advertises USB remote wake but its own and its root hub's wake
+permissions were disabled; the PCI controller and platform wake permissions were
+already enabled. This is promising, not proof that touch generates a wake event.
+No sensor-side low-power/wake command has been identified or implemented.
+
+The package includes a **disabled-by-default** permission trial. Read status, then
+start it temporarily with another wake method and password access available:
+
+```sh
+/usr/libexec/eh575-wakeup status
+sudo systemctl start eh575-wakeup.service
+```
+
+Lock and suspend through the normal desktop action. Once the machine is asleep,
+touch and hold your enrolled finger. The intended sequence is touch wakes the
+laptop, GNOME starts its normal fingerprint verification, and the held finger
+unlocks. Actual sensor wake and GNOME timing must be tested on hardware; an enabled
+sysfs flag is not a passing test. A non-enrolled finger may wake the laptop, but
+must NOT unlock it. Recheck password fallback and several suspend cycles.
+
+Only if those trials pass, persist the opt-in at boot:
+
+```sh
+sudo systemctl enable eh575-wakeup.service
+```
+
+The helper validates `1c7a:0575` revision `1072`, derives that reader's current USB
+hub ancestry, and changes only those `power/wakeup` attributes. It does not enable
+other USB devices, PCI/platform wake, disable sleep, poll while suspended, or alter
+PAM/GNOME/matching/calibration. Enabling the shared hub can let other devices on
+that hub wake the laptop too. A pre-sleep hook reapplies permission after
+libfprint's normal probe/resume wake-policy resets, only while opted in. Root-owned
+0700 `/run/eh575-wakeup` stores a 0600 rollback journal; stopping restores the
+original values on validated current paths. Failures are reported, not treated as
+successful wake support. A moved/missing reader can prevent full restoration;
+reboot clears the transient settings, and disabling prevents boot reapplication.
+
+Disable and restore wake settings without removing fingerprint support:
+
+```sh
+sudo systemctl disable --now eh575-wakeup.service
+```
+
+If touching still does not wake, disable the trial. The next development step is
+investigating the EH575's sensor-side wake arming, potentially by tracing the
+Windows driver's sleep preparation; do not guess undocumented register writes.
+This trial is for suspend, not a promise of power-on or hibernation wake.
+
 ### Rollback
 
 ```sh
@@ -381,6 +434,7 @@ sudo apt remove libfprint-eh575-experimental
 ```
 
 Removal deletes the package-owned override and library, reloads systemd and
+stops/disables the optional wake trial and restores its recorded settings, then
 tries to restart fprintd so it uses the distribution library again. It does not
 erase private test data or system fingerprint enrollments. Stored prints are
 deliberately preserved; remove them separately through the appropriate fingerprint

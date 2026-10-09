@@ -14,6 +14,16 @@ the original upstream baseline. The GitHub `origin` is the development fork;
 
 ## Current status
 
+An opt-in USB remote-wake permission trial now accompanies the deployment package.
+It is not a driver protocol change: the root helper validates the tested revision,
+enables only the reader and its USB hub ancestors, journals rollback state in
+protected `/run`, and reapplies permission in a pre-sleep hook after fprintd's
+logind suspend cleanup. Installation does not enable it. Synthetic tests cover
+target selection, original-policy preservation, failed-write rollback, unsafe
+state guards and opt-in behavior. Physical touch-to-wake is still unproven;
+sensor-side wake arming, GNOME timing, and battery impact need hardware trials.
+See README and the GNOME trial guide for temporary enable/disable commands.
+
 The persistent-profile development update reuses measured empty-reader calibration
 across boot/resume, bound to hardware revision and the physical USB port identifier,
 with no time-based expiry. It replaces fatal finger-present calibration with
