@@ -6,9 +6,11 @@ NBIS/Bozorth3 path with the default matching threshold in the default build.
 An opt-in native stationary ridge matcher is described below. There is no Python
 runtime matcher, proprietary implementation, firmware blob or public ABI change.
 
-Development base: `6f9479c3d55f847c1b3769f28ceb99227f9858cf`. Keep `master`
-as the upstream baseline and do driver work on `codex/egis0575`. The GitHub
-`origin` is the development fork; `upstream` is the original GitLab repository.
+Development base: `6f9479c3d55f847c1b3769f28ceb99227f9858cf`. The EH575 work
+was developed on `codex/egis0575` and fast-forwarded into `master` on 2026-10-09.
+`master` now includes the experimental implementation; the commit above identifies
+the original upstream baseline. The GitHub `origin` is the development fork;
+`upstream` is the original GitLab repository.
 
 ## Current status
 

@@ -185,10 +185,12 @@ as part of this trial.
 
 ## Build and test without changing authentication
 
-Work on branch `codex/egis0575`; `master` is the retained upstream baseline.
+The EH575 implementation is available on `master`. Its development history is
+also preserved on branch `codex/egis0575`; the original upstream base is recorded
+in the attribution section below.
 
 ```sh
-git clone --branch codex/egis0575 https://github.com/ivanov-gv/libfprint.git
+git clone --branch master https://github.com/ivanov-gv/libfprint.git
 cd libfprint
 ```
 
