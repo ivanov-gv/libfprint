@@ -26,6 +26,12 @@ if 'egis0575' in drivers
   test('egis0575-touch-runner', python3,
     args: [files('test-egis0575-touch-runner.py')],
     suite: ['drivers', 'egis0575'])
+  gjs = find_program('gjs', required: false)
+  if gjs.found()
+    test('egis0575-wake-controller', gjs,
+      args: ['-m', files('test-egis0575-wake-controller.mjs')],
+      suite: ['drivers', 'egis0575'])
+  endif
   test('egis0575-driver-report', python3,
     args: [files('test-egis0575-driver-report.py')],
     suite: ['drivers', 'egis0575'])

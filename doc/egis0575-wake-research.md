@@ -277,3 +277,51 @@ unverified. The current unlocked-only helper is not sufficient for lock-screen
 use: a companion must start it only when normal authentication is idle and stop
 it before keyboard/mouse-driven authentication or sleep. That integration is not
 yet installed or complete.
+
+### Handoff controller: tested policy, not a live extension
+
+`scripts/eh575-wake-controller.mjs` now provides the original, portable handoff
+policy for a future GNOME adapter. It has no GNOME, USB, system-bus, process,
+authentication or installation APIs. A supplied adapter must keep one controller
+across disable/re-enable cycles and report child exit only after actually reaping
+the child. Cancelling a Gio wait is not proof that the child exited; use SIGTERM
+to request the native helper's bounded restoration and continue waiting for exit.
+
+The policy starts one observation only when every supplied state is explicitly
+true: supported Shell/session, locked, fully blanked, ordinary authentication
+idle, host awake, and system bus alive. It accepts only the exact contact marker
+AND clean child exit, rechecks current state before its wake/prompt callback, and
+rejects cancelled, stale, malformed, duplicate-marker and failed completions.
+It never provides an authentication outcome or calls an unlock/deactivate API.
+Disable/re-enable retains the process lease until exit; no immediate calibration
+loop is started after failure or completion within the same blank cycle.
+
+Fresh inspection of Ubuntu Shell 50.1 found that `_showPrompt()` synchronously
+creates the prompt and the key handler immediately adds the typed character.
+Asynchronously delaying that method would lose input or access a missing prompt.
+The future adapter instead needs to gate the ordinary verifier's backend start
+until native child exit, preserving synchronous prompt creation and keyboard
+input. The controller supplies queued original-method callbacks with explicit
+live-context validation and cancellation/supersession cleanup. It also allows
+still-valid, explicitly requested normal authentication to continue after an
+extension disable, but never emits a fingerprint wake from that disabled lease.
+It does not intercept any actual GNOME or GDM function today.
+
+The 18 original fake tests run in GJS (and Node), covering strict state gates,
+handoff ordering, pending cancellation, stale completions, disable/re-enable,
+errors, synchronous child completion and request cleanup. They do not open USB,
+connect to D-Bus, lock, sleep or authenticate. Run from this repository:
+
+```sh
+gjs -m tests/test-egis0575-wake-controller.mjs
+```
+
+Meson registers this test when GJS is available. This is a foundation, not proof
+of physical lock-screen wake, a complete Shell adapter, sustained blank-screen
+watching, or guaranteed password fallback in live GNOME. Remaining work includes
+a bounded lock-aware native watcher, a child supervision adapter with a real
+exit/recovery watchdog, precise verifier cancellation/hold semantics, Shell-50
+state hooks, and physical keyboard/password/sleep/disable tests. Do not install
+or enable a lock-screen companion until those integration gates are implemented
+and checked. The pending unclaimed-handle suspend trial remains a separate
+hardware gate; no result is inferred from these synthetic tests.
